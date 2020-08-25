@@ -127,3 +127,13 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+
+# Project ignores
+fire-dataset
+source_videos/*
+test8
+effects/raw_fire_vid/*
+effects/raw_fire_images/*
+output/*
+!output/run_annot.py
