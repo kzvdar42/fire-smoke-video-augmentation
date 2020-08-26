@@ -3,6 +3,7 @@ import subprocess
 
 
 def convert_mov2webm(input_path, out_path, y=False):
+    filename = os.path.splitext(os.path.split(input_path)[1])[0]
     print(f'Converting {filename}')
     arguments = [
         'ffmpeg',

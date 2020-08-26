@@ -82,13 +82,14 @@ class Augmentations:
         folder_path = os.path.split(self.png_effects[0])[0]
         png_annot_path = os.path.join(folder_path, 'annotations.csv')
         png_annotations = defaultdict(list)
-        with open(png_annot_path) as in_file:
-            for line in in_file.readlines():
-                category, x1, y1, x2, y2, img_name = line.split(',')[:6]
-                png_annotations[img_name].append([*map(int, [x1, y1, x2, y2]), category])
+        if os.path.isfile(png_annot_path):
+            with open(png_annot_path) as in_file:
+                for line in in_file.readlines():
+                    category, x1, y1, x2, y2, img_name = line.split(',')[:6]
+                    png_annotations[img_name].append([*map(int, [x1, y1, x2, y2]), category])
 
-        for k, v in png_annotations.items():
-            png_annotations[k] = np.array(v)
+            for k, v in png_annotations.items():
+                png_annotations[k] = np.array(v)
 
         # Load images.
         for png_path in self.png_effects:
@@ -218,6 +219,10 @@ class Augmentations:
                 annot = self.mov_annotations[e_info.idx]
                 cap.set(cv2.CAP_PROP_POS_FRAMES, e_info.cur_dur)
                 e_image = cap.read()[1]
+                # If no frame is read, delete effect
+                if e_image is None:
+                    eff_to_delete.append(i)
+                    continue
                 # Color key black with everything < ck_start = 0
                 # and everything > ck_start + ck_range = 255
                 # (value - ck_start) / ck_range

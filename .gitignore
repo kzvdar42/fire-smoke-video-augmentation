@@ -133,7 +133,7 @@ dmypy.json
 fire-dataset
 source_videos/*
 test8
-effects/raw_fire_vid/*
-effects/raw_fire_images/*
+effects/*
+!effects/prep*
 output/*
 !output/run_annot.py
