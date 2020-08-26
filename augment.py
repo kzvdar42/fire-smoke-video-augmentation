@@ -1,6 +1,7 @@
 from collections import defaultdict
 from dataclasses import dataclass
 import os
+import yaml
 
 import cv2
 import numpy as np
@@ -8,7 +9,7 @@ from pycocotools.coco import COCO
 from bbox_utils import (rotate_im, get_corners, rotate_box,
                         get_enclosing_box, from_ratio_to_pixel,
                         convert_xywh_xyxy, convert_xyxy_xywh,
-em                        resize, rotate, flip, gamma_correction)
+                        resize, rotate, flip, gamma_correction)
 
 
 @dataclass
@@ -20,40 +21,63 @@ class Effect:
     offset: tuple
     angle: float
     is_flip: bool
-    gain: float # contrast 
-    bias: float # brightness
-    gamma: float # gamma correction
+    gain: float  # contrast
+    bias: float  # brightness
+    gamma: float  # gamma correction
     duration: int
     cur_dur: int  # Current duration
 
 
+@dataclass(init=False)
 class Augmentations:
 
+    do_resize: bool = True
+    png_min_size: int = 60
+    png_max_size: int = 200
+    mov_min_size: int = 180
+    mov_max_size: int = 600
+
+    do_flip: bool = True
+    flip_chance: int = 2
+
+    do_rotate: bool = True
+    max_angle: bool = 30
+
+    do_brightness: bool = True
+    gain_loc: float = 1
+    gain_scale: float = 0.15
+    bias_loc: float = 0
+    bias_scale: float = 10
+
+    do_gamma: bool = True
+    gamma_from: float = 0.25
+    gamma_to: float = 2
+
+    min_duration: int = 30
+    max_duration: int = 150
+    max_n_objects: int = 5
+    debug_level: int = 0
+    ck_start: int = 10
+    ck_range: int = 20
+
     def __init__(self, png_effects, mov_effects, cat_id,
-                 do_resize=True, do_flip=True, do_rotate=True,
-                 do_brightness=True, do_gamma=True, debug_level=0):
+                 config_path=None, **kwargs):
         self.png_effects = png_effects
         self.mov_effects = mov_effects
         self.cat_id = cat_id
-        self.do_resize, self.do_flip = do_resize, do_flip
-        self.do_rotate, self.do_brightness = do_rotate, do_brightness
-        self.do_gamma = do_gamma
-        self.debug_level = debug_level
         self.objects = []
-        self.min_size = 60
-        self.max_size = 400
-        self.max_angle = 30
-        # Duration limits for `png` effects.
-        self.min_duration = 1 * 30
-        self.max_duration = 5 * 30
         self.last_object_id = -1
-        self.max_n_objects = 5
+        # Load config
+        if config_path:
+            with open(config_path) as in_file:
+                config = yaml.load(in_file, Loader=yaml.FullLoader)
+                self.__dict__.update(config)
+        # Override values by kwargs
+        self.__dict__.update(kwargs)
 
         # Preload effect images and videos.
-        self.loaded_png = []
-        self.loaded_mov = []
-        self.png_annotations = []
-        self.mov_annotations = []
+        self.loaded_png, self.loaded_mov = [], []
+        self.png_annotations, self.mov_annotations = [], []
 
         # Load image annotations.
         folder_path = os.path.split(self.png_effects[0])[0]
@@ -73,7 +97,7 @@ class Augmentations:
             self.loaded_png.append(effect)
             png_file_name = os.path.split(png_path)[1]
             self.png_annotations.append(png_annotations[png_file_name])
-        
+
         # Load mov effects.
         for mov_path in self.mov_effects:
             cap = cv2.VideoCapture(mov_path)
@@ -96,6 +120,36 @@ class Augmentations:
             else:
                 self.mov_annotations.append(None)
 
+    def create_effect(self, frame):
+        if np.random.randint(2):
+            e_type = 'png'
+            min_size, max_size = self.png_min_size, self.png_max_size
+            idx = np.random.randint(len(self.png_effects))
+            duration = np.random.randint(self.min_duration, self.max_duration)
+        else:
+            e_type = 'mov'
+            min_size, max_size = self.mov_min_size, self.mov_max_size
+            idx = np.random.randint(len(self.mov_effects))
+            cap = cv2.VideoCapture(self.mov_effects[idx])
+            total_frames = cap.get(7)
+            duration = np.random.randint(min(self.min_duration, total_frames) - 1, total_frames)
+            cap.release()
+            del cap
+        size = np.random.randint(min_size, max_size)
+        angle = np.random.uniform(-self.max_angle, self.max_angle)
+        # Make offset such that at least `min_size` of object is still visible.
+        offset = (np.random.randint(-size // 2 + min_size, frame.shape[1] - min_size),
+                  np.random.randint(min_size, frame.shape[0] - min_size))
+        is_flip = np.random.randint(self.flip_chance) == 0
+        gain = np.random.normal(loc=self.gain_loc, scale=self.gain_scale)
+        bias = np.random.normal(loc=self.bias_loc, scale=self.bias_scale)
+        gamma = np.random.uniform(self.gamma_from, self.gamma_to)
+        # Add object to our dict.
+        self.last_object_id += 1
+        self.objects.append(Effect(e_type, idx, self.last_object_id,
+                                   size, offset, angle, is_flip,
+                                   gain, bias, gamma, duration, 0))
+
     def merge_images(self, img1, img2, offset=None):
         offset = offset if offset is not None else (0, 0)
         img1 = img1.copy()
@@ -116,38 +170,6 @@ class Augmentations:
         img1[y1: y2, x1: x2] = cv2.convertScaleAbs(img1[y1: y2, x1: x2])
         return img1
 
-    def create_effect(self, frame):
-        if np.random.randint(2):
-            e_type = 'png'
-            idx = np.random.randint(len(self.png_effects))
-            duration = np.random.randint(self.min_duration, self.max_duration)
-        else:
-            e_type = 'mov'
-            idx = np.random.randint(len(self.mov_effects))
-            cap = cv2.VideoCapture(self.mov_effects[idx])
-            total_frames = cap.get(7)
-            duration = np.random.randint(min(self.min_duration, total_frames) - 1, total_frames)
-            cap.release()
-            del cap
-        size = np.random.randint(self.min_size, self.max_size)
-        # XXX: as video effects are only a part of the frame, increase the size.
-        if e_type == 'mov':
-            size = np.clip(size * 4, 0, int(self.max_size * 1.2))
-
-        angle = np.random.uniform(-self.max_angle, self.max_angle)
-        offset = (np.random.randint(-size // 2 + self.min_size, frame.shape[1] - self.min_size),
-                  np.random.randint(self.min_size, frame.shape[0] - self.min_size))
-        is_flip = np.random.randint(2) > 0
-        gain = np.random.normal(loc=1, scale=0.15) # ~ from: 0.40 to: 1.6  mean: 1.00
-        bias = np.random.normal(loc=0, scale=10)   # ~ from: -40  to: 40   mean: 0
-        gamma = np.random.uniform(0.25, 2)
-        # Add object to our dict.
-        self.last_object_id += 1
-        self.objects.append(Effect(e_type, idx, self.last_object_id,
-                                   size, offset, angle, is_flip, 
-                                   gain, bias, gamma, duration, 0))
-
-
     def draw_effect_info(self, frame, e_info):
         effects = self.png_effects if e_info.type == 'png' else self.mov_effects
         effect_filename = os.path.split(effects[e_info.idx])[1]
@@ -158,26 +180,27 @@ class Augmentations:
         if self.do_resize:
             text.append(f'size: {e_info.size}')
         if self.do_brightness:
-            text.extend([f'gain: {e_info.gain:.2f}', f'bias: {e_info.bias:.2f}'])
+            text.extend([f'gain: {e_info.gain:.2f}',
+                         f'bias: {e_info.bias:.2f}'])
         if self.do_gamma:
             text.append(f'gamma: {e_info.gamma:.2f}')
         if self.do_rotate:
             text.append(f'angle: {e_info.angle:.2f}')
-        
+
         for j in range(0, len(text) + 1, 2):
             cv2.putText(frame, '-'.join(text[j:j + 2]),
-                (e_info.offset[0], e_info.offset[1] + j * 15),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (0, 0, 0),
-                4)
-            
+                        (e_info.offset[0], e_info.offset[1] + j * 15),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1,
+                        (0, 0, 0),
+                        4)
+
             cv2.putText(frame, '-'.join(text[j:j + 2]),
-                (e_info.offset[0], e_info.offset[1] + j * 15),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (255, 255, 255),
-                2)
+                        (e_info.offset[0], e_info.offset[1] + j * 15),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1,
+                        (255, 255, 255),
+                        2)
 
     def augment(self, frame, frame_num, writer=None):
         # Add new effect
@@ -197,12 +220,12 @@ class Augmentations:
                 annot = self.mov_annotations[e_info.idx]
                 cap.set(cv2.CAP_PROP_POS_FRAMES, e_info.cur_dur)
                 e_image = cap.read()[1]
-                # Color key black with everything < start = 0
-                # and everything > start + range = 255
-                # (value - start) / range
+                # Color key black with everything < ck_start = 0
+                # and everything > ck_start + ck_range = 255
+                # (value - ck_start) / ck_range
                 hsv_e_image = cv2.cvtColor(e_image, cv2.COLOR_BGR2HSV)
                 v_e_image = hsv_e_image[:, :, 2:3].astype(np.int32)
-                e_alpha = np.clip((v_e_image - 10) / 20, 0, 1) * 255
+                e_alpha = np.clip((v_e_image - self.ck_start) / self.ck_range, 0, 1) * 255
                 e_alpha = e_alpha.astype(np.uint8)
                 # Concat with alpha channel
                 e_image = np.concatenate((e_image, e_alpha), -1)
@@ -214,11 +237,11 @@ class Augmentations:
                         imgIds=e_info.cur_dur + 1, iscrowd=None)
                     for obj in annot.loadAnns(ann_ids):
                         bboxes.append(convert_xywh_xyxy(obj['bbox'], width, height))
-            
+
             bboxes = np.array(bboxes).astype(np.float64)
             if len(bboxes) == 0:
                 bboxes = None
-            
+
             # Resize image
             if self.do_resize:
                 e_image, bboxes = resize(e_image, e_info.size, bboxes)

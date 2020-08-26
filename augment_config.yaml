@@ -1,0 +1,46 @@
+do_resize: True
+# png size limits
+png_min_size: 60
+png_max_size: 200
+# As `mov` effects take small chunk of the frame
+# We have distinct limits for them
+mov_min_size: 200
+mov_max_size: 600
+
+do_flip: True
+flip_chance: 2 # 1 / chance
+
+do_rotate: True
+max_angle: 30
+
+do_brightness: True
+# gain_loc: 1 gain_scale: 0.15 ~ from: 0.40 to: 1.6  mean: 1.00
+gain_loc: 1
+gain_scale: 0.15
+# bias_loc: 0 bias_scale: 10 ~ from: -40 to: 40 mean: 0
+bias_loc: 0
+bias_scale: 10
+
+# Gamma correction control
+do_gamma: True
+gamma_from: 0.25
+gamma_to: 2
+
+# Duration limits for `png` effects
+min_duration: 30
+max_duration: 150 # 5 * 30
+
+# Maximum number of objects in the frame
+max_n_objects: 5
+
+# Color keying black from effects
+# everything < ck_start = 0 (invisible)
+# and everything > ck_start + ck_range = 255 (fully visible)
+ck_start: 10
+ck_range: 20
+
+# Debug level:
+# 0 = nothing
+# 1 + bboxes and offset point
+# 2 + effect info
+debug_level: 1
