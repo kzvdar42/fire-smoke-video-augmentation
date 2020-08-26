@@ -60,11 +60,10 @@ class Augmentations:
     ck_start: int = 10
     ck_range: int = 20
 
-    def __init__(self, png_effects, mov_effects, cat_id,
+    def __init__(self, png_effects, mov_effects,
                  config_path=None, **kwargs):
         self.png_effects = png_effects
         self.mov_effects = mov_effects
-        self.cat_id = cat_id
         self.objects = []
         self.last_object_id = -1
         # Load config
@@ -86,7 +85,7 @@ class Augmentations:
         with open(png_annot_path) as in_file:
             for line in in_file.readlines():
                 category, x1, y1, x2, y2, img_name = line.split(',')[:6]
-                png_annotations[img_name].append([*map(int, [x1, y1, x2, y2])])
+                png_annotations[img_name].append([*map(int, [x1, y1, x2, y2]), category])
 
         for k, v in png_annotations.items():
             png_annotations[k] = np.array(v)
@@ -169,6 +168,15 @@ class Augmentations:
                                 + img1[y1:y2, x1: x2] * (1 - mask))
         img1[y1: y2, x1: x2] = cv2.convertScaleAbs(img1[y1: y2, x1: x2])
         return img1
+    
+    def put_text(self, frame, text, position):
+        """Draw white text with black outline on the given frame."""
+        cv2.putText(frame, text, position,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1, (0, 0, 0), 4)
+        cv2.putText(frame, text, position,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1, (255, 255, 255), 2)
 
     def draw_effect_info(self, frame, e_info):
         effects = self.png_effects if e_info.type == 'png' else self.mov_effects
@@ -188,19 +196,8 @@ class Augmentations:
             text.append(f'angle: {e_info.angle:.2f}')
 
         for j in range(0, len(text) + 1, 2):
-            cv2.putText(frame, '-'.join(text[j:j + 2]),
-                        (e_info.offset[0], e_info.offset[1] + j * 15),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        1,
-                        (0, 0, 0),
-                        4)
-
-            cv2.putText(frame, '-'.join(text[j:j + 2]),
-                        (e_info.offset[0], e_info.offset[1] + j * 15),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        1,
-                        (255, 255, 255),
-                        2)
+            position = (e_info.offset[0], e_info.offset[1] + j * 15)
+            self.put_text(frame, '-'.join(text[j:j + 2]), position)
 
     def augment(self, frame, frame_num, writer=None):
         # Add new effect
@@ -214,7 +211,8 @@ class Augmentations:
             # Get image
             if e_info.type == 'png':
                 e_image = self.loaded_png[e_info.idx]
-                bboxes = self.png_annotations[e_info.idx]
+                bboxes = self.png_annotations[e_info.idx][:, :4]
+                e_cats = self.png_annotations[e_info.idx][:, 4]
             elif e_info.type == 'mov':
                 cap, alpha_cap = self.loaded_mov[e_info.idx]
                 annot = self.mov_annotations[e_info.idx]
@@ -230,13 +228,14 @@ class Augmentations:
                 # Concat with alpha channel
                 e_image = np.concatenate((e_image, e_alpha), -1)
                 # Get bboxes
-                bboxes = []
+                bboxes, e_cats = [], []
                 if annot is not None:
                     height, width = e_image.shape[:2]
                     ann_ids = annot.getAnnIds(
                         imgIds=e_info.cur_dur + 1, iscrowd=None)
                     for obj in annot.loadAnns(ann_ids):
                         bboxes.append(convert_xywh_xyxy(obj['bbox'], width, height))
+                        e_cats.append(annot.cats[obj['category_id']]['name'])
 
             bboxes = np.array(bboxes).astype(np.float64)
             if len(bboxes) == 0:
@@ -273,14 +272,17 @@ class Augmentations:
             if bboxes is not None:
                 bboxes += np.hstack((offset, offset))
                 bboxes = bboxes.astype(np.int32)
-                for bbox in bboxes:
+                for bbox, cat in zip(bboxes, e_cats):
                     # Show annotations
                     if self.debug_level > 0:
                         cv2.rectangle(frame, tuple(bbox[:2]), tuple(bbox[2:4]), (0, 0, 255), 3)
                     # Write annotations
                     if writer is not None:
                         bbox = convert_xyxy_xywh(bbox)
-                        writer.add_annotation(frame_num, bbox, e_info.track_id, self.cat_id)
+                        cat_id = writer.get_cat_id(cat)
+                        writer.add_annotation(frame_num, bbox, e_info.track_id, cat_id)
+                        if self.debug_level > 1:
+                            self.put_text(frame, cat, tuple(bbox[:2]))
 
             # draw a point there offset is
             if self.debug_level > 0:
