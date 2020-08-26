@@ -8,7 +8,7 @@ from pycocotools.coco import COCO
 from bbox_utils import (rotate_im, get_corners, rotate_box,
                         get_enclosing_box, from_ratio_to_pixel,
                         convert_xywh_xyxy, convert_xyxy_xywh,
-                        resize, rotate, flip)
+em                        resize, rotate, flip, gamma_correction)
 
 
 @dataclass
@@ -20,6 +20,9 @@ class Effect:
     offset: tuple
     angle: float
     is_flip: bool
+    gain: float # contrast 
+    bias: float # brightness
+    gamma: float # gamma correction
     duration: int
     cur_dur: int  # Current duration
 
@@ -27,11 +30,15 @@ class Effect:
 class Augmentations:
 
     def __init__(self, png_effects, mov_effects, cat_id,
-                 do_resize=True, do_flip=True, do_rotate=True):
+                 do_resize=True, do_flip=True, do_rotate=True,
+                 do_brightness=True, do_gamma=True, debug_level=0):
         self.png_effects = png_effects
         self.mov_effects = mov_effects
         self.cat_id = cat_id
-        self.do_resize, self.do_flip, self.do_rotate = do_resize, do_flip, do_rotate
+        self.do_resize, self.do_flip = do_resize, do_flip
+        self.do_rotate, self.do_brightness = do_rotate, do_brightness
+        self.do_gamma = do_gamma
+        self.debug_level = debug_level
         self.objects = []
         self.min_size = 60
         self.max_size = 400
@@ -131,11 +138,46 @@ class Augmentations:
         offset = (np.random.randint(-size // 2 + self.min_size, frame.shape[1] - self.min_size),
                   np.random.randint(self.min_size, frame.shape[0] - self.min_size))
         is_flip = np.random.randint(2) > 0
-
+        gain = np.random.normal(loc=1, scale=0.15) # ~ from: 0.40 to: 1.6  mean: 1.00
+        bias = np.random.normal(loc=0, scale=10)   # ~ from: -40  to: 40   mean: 0
+        gamma = np.random.uniform(0.25, 2)
         # Add object to our dict.
         self.last_object_id += 1
         self.objects.append(Effect(e_type, idx, self.last_object_id,
-                                   size, offset, angle, is_flip, duration, 0))
+                                   size, offset, angle, is_flip, 
+                                   gain, bias, gamma, duration, 0))
+
+
+    def draw_effect_info(self, frame, e_info):
+        effects = self.png_effects if e_info.type == 'png' else self.mov_effects
+        effect_filename = os.path.split(effects[e_info.idx])[1]
+
+        text = [f'{effect_filename}', f'offset: {e_info.offset}']
+        if self.do_flip:
+            text.append(f'flip: {e_info.is_flip:1d}')
+        if self.do_resize:
+            text.append(f'size: {e_info.size}')
+        if self.do_brightness:
+            text.extend([f'gain: {e_info.gain:.2f}', f'bias: {e_info.bias:.2f}'])
+        if self.do_gamma:
+            text.append(f'gamma: {e_info.gamma:.2f}')
+        if self.do_rotate:
+            text.append(f'angle: {e_info.angle:.2f}')
+        
+        for j in range(0, len(text) + 1, 2):
+            cv2.putText(frame, '-'.join(text[j:j + 2]),
+                (e_info.offset[0], e_info.offset[1] + j * 15),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 0, 0),
+                4)
+            
+            cv2.putText(frame, '-'.join(text[j:j + 2]),
+                (e_info.offset[0], e_info.offset[1] + j * 15),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (255, 255, 255),
+                2)
 
     def augment(self, frame, frame_num, writer=None):
         # Add new effect
@@ -153,16 +195,15 @@ class Augmentations:
             elif e_info.type == 'mov':
                 cap, alpha_cap = self.loaded_mov[e_info.idx]
                 annot = self.mov_annotations[e_info.idx]
-                cap.set(1, e_info.cur_dur)
-                alpha_cap.set(1, e_info.cur_dur)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, e_info.cur_dur)
                 e_image = cap.read()[1]
-                # Color keying black
+                # Color key black with everything < start = 0
+                # and everything > start + range = 255
+                # (value - start) / range
                 hsv_e_image = cv2.cvtColor(e_image, cv2.COLOR_BGR2HSV)
-                # TODO: Improve color keying
-                ck_alpha = cv2.inRange(hsv_e_image, (0, 0, 0), (180, 255, 30))
-                e_alpha = alpha_cap.read()[1]
-                e_alpha[ck_alpha == 0] = 255
-                e_alpha[ck_alpha != 0] = 0
+                v_e_image = hsv_e_image[:, :, 2:3].astype(np.int32)
+                e_alpha = np.clip((v_e_image - 10) / 20, 0, 1) * 255
+                e_alpha = e_alpha.astype(np.uint8)
                 # Concat with alpha channel
                 e_image = np.concatenate((e_image, e_alpha), -1)
                 # Get bboxes
@@ -186,6 +227,14 @@ class Augmentations:
             if self.do_flip and e_info.is_flip:
                 e_image, bboxes = flip(e_image, bboxes)
 
+            # Contrast & Brightness
+            if self.do_brightness:
+                e_image[:, :, :3] = cv2.convertScaleAbs(e_image[:, :, :3], alpha=e_info.gain, beta=e_info.bias)
+
+            # Gamma correction
+            if self.do_gamma:
+                e_image[:, :, :3] = gamma_correction(e_image[:, :, :3], e_info.gamma)
+
             # Rotate image
             if self.do_rotate and e_info.angle:
                 e_image, bboxes = rotate(e_image, e_info.angle, bboxes)
@@ -197,18 +246,25 @@ class Augmentations:
             # Apply effect on image
             frame = self.merge_images(frame, e_image, offset)
 
-            # Add bbox around effect
+            # Move bboxes to offset position
             if bboxes is not None:
                 bboxes += np.hstack((offset, offset))
                 bboxes = bboxes.astype(np.int32)
                 for bbox in bboxes:
-                    cv2.rectangle(frame, tuple(bbox[:2]), tuple(bbox[2:4]), (0, 0, 255), 3)
+                    # Show annotations
+                    if self.debug_level > 0:
+                        cv2.rectangle(frame, tuple(bbox[:2]), tuple(bbox[2:4]), (0, 0, 255), 3)
+                    # Write annotations
                     if writer is not None:
                         bbox = convert_xyxy_xywh(bbox)
                         writer.add_annotation(frame_num, bbox, e_info.track_id, self.cat_id)
 
             # draw a point there offset is
-            cv2.circle(frame, e_info.offset, 10, (0, 255, 0), 2)
+            if self.debug_level > 0:
+                cv2.circle(frame, e_info.offset, 10, (0, 255, 0), 2)
+            # Add effect info
+            if self.debug_level > 1:
+                self.draw_effect_info(frame, e_info)
 
             # Delete or update cur_dur
             if e_info.cur_dur >= e_info.duration:

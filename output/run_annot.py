@@ -82,6 +82,6 @@ while True:
         break
     elif key == ord('w'):
         counter -= 1
-        cap.set(1, counter)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, counter)
     else:
         counter += 1

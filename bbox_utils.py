@@ -50,6 +50,12 @@ def rotate(image, angle, bboxes=None):
     return image, bboxes
 
 
+def gamma_correction(image, gamma=1):
+    lut = np.clip(pow(np.array([range(256)]) / 255.0, gamma) * 255.0, 0, 255)
+    lut = lut.astype(np.uint8)
+    return cv2.LUT(image, lut)
+
+
 def from_ratio_to_pixel(boxes, width, height):
     boxes[:, 0] *= width
     boxes[:, 1] *= height
