@@ -16,29 +16,30 @@ max_angle: 30
 do_brightness: True
 # gain_loc: 1 gain_scale: 0.15 ~ from: 0.40 to: 1.6  mean: 1.00
 # gain_loc: 1 gain_scale: 0.075 ~ from: 0.70 to: 1.3  mean: 1.00
+# gain_loc: 1 gain_scale: 0.05 ~ from: 0.80 to: 1.2  mean: 1.00
 gain_loc: 1
-gain_scale: 0.075
+gain_scale: 0.05
 # bias_loc: 0 bias_scale: 10 ~ from: -40 to: 40 mean: 0
 # bias_loc: 0 bias_scale: 5  ~ from: -20 to: 20 mean: 0
 bias_loc: 0
-bias_scale: 5
+bias_scale: 2.5
 
 # Gamma correction control
-do_gamma: True
-gamma_from: 0.75
-gamma_to: 1.25
+do_gamma: False
+gamma_from: 0.9
+gamma_to: 1.1
 
 # Duration limits for `png` effects
-min_duration: 30
-max_duration: 150 # 5 * 30
+min_duration: 1
+max_duration: 2 # 5 * 30
 
 # Maximum number of objects in the frame
-min_n_objects: 0
-max_n_objects: 5
+min_n_objects: 1
+max_n_objects: 1
 # Generation probability of 1 object: 1 / gen_prob
-gen_prob: 30
+gen_prob: 1
 # Gen prob of (n + 1)'th object: 1 / (gen_prob + (n - 1) * next_gen_prob)
-next_gen_prob: 50
+next_gen_prob: 0
 
 # Color keying black from effects (only video)
 # everything < ck_start = 0 (invisible)
