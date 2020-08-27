@@ -174,7 +174,7 @@ class Augmentations:
                                 + img1[y1:y2, x1: x2] * (1 - mask))
         img1[y1: y2, x1: x2] = cv2.convertScaleAbs(img1[y1: y2, x1: x2])
         return img1
-    
+
     def put_text(self, frame, text, position):
         """Draw white text with black outline on the given frame."""
         cv2.putText(frame, text, position,
@@ -265,11 +265,13 @@ class Augmentations:
 
             # Contrast & Brightness
             if self.do_brightness:
-                e_image[:, :, :3] = cv2.convertScaleAbs(e_image[:, :, :3], alpha=e_info.gain, beta=e_info.bias)
+                e_image[:, :, :3] = cv2.convertScaleAbs(
+                    e_image[:, :, :3], alpha=e_info.gain, beta=e_info.bias)
 
             # Gamma correction
             if self.do_gamma:
-                e_image[:, :, :3] = gamma_correction(e_image[:, :, :3], e_info.gamma)
+                e_image[:, :, :3] = gamma_correction(
+                    e_image[:, :, :3], e_info.gamma)
 
             # Rotate image
             if self.do_rotate and e_info.angle:

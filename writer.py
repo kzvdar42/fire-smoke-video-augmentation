@@ -10,7 +10,7 @@ class COCO_writer:
         self.categories = categories
         self.annotations = []
         self.images = []
-    
+
     def get_cat_id(self, cat_name):
         for cat in self.categories:
             if cat['name'] == cat_name:

@@ -39,11 +39,13 @@ gen_prob: 30
 # Gen prob of (n + 1)'th object: 1 / (gen_prob + (n - 1) * next_gen_prob)
 next_gen_prob: 50
 
-# Color keying black from effects
+# Color keying black from effects (only video)
 # everything < ck_start = 0 (invisible)
 # and everything > ck_start + ck_range = 255 (fully visible)
 ck_start: 10
 ck_range: 20
+# Use alpha channel instead of color keing
+use_alpha:  False
 
 # Debug level:
 # 0 = nothing

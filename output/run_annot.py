@@ -6,10 +6,12 @@ import argparse
 
 
 parser = argparse.ArgumentParser(description='test annotation')
-parser.add_argument('--folder_path', type=str, required=True, help="path to folder with video and unzipped annotations")
+parser.add_argument('--folder_path', type=str, required=True,
+                    help="path to folder with video and unzipped annotations")
 
 args = parser.parse_args()
-annotation_path = args.folder_path + os.sep + 'annotations' + os.sep + 'instances_default.json'
+annotation_path = args.folder_path + os.sep + \
+    'annotations' + os.sep + 'instances_default.json'
 folders = os.listdir(args.folder_path)
 mp4state = False
 
@@ -17,7 +19,7 @@ for element in folders:
     if ".mp4" in element:
         video_file_path = args.folder_path + os.sep + element
         mp4state = True
-        
+
 if mp4state is False:
     sys.exit("no video file found")
 
@@ -44,7 +46,7 @@ for annot in data['annotations']:
         class_id = annot['category_id']
         bbox = annot['bbox']
         bbox[2] = bbox[0] + bbox[2]
-        bbox[3] =  bbox[1] + bbox[3]
+        bbox[3] = bbox[1] + bbox[3]
         element = {'track_id': track_id, 'bbox': bbox, 'class_id': class_id}
         dct[annot['image_id']].append(element)
     else:
@@ -61,18 +63,20 @@ while True:
         annots = dct[counter]
         for annot in annots:
             dets = [int(x) for x in annot['bbox']]
-            cv2.rectangle(frame, (dets[0], dets[1]), (dets[2], dets[3]), rect_color, 2)
+            cv2.rectangle(frame, (dets[0], dets[1]),
+                          (dets[2], dets[3]), rect_color, 2)
 
             track_id = str(annot['track_id'])
             cx = dets[0] + 12
             cy = dets[1] - 10
-            cv2.putText(frame, f"track_id - {track_id}", (cx, cy), cv2.FONT_HERSHEY_DUPLEX, 1, track_color, 2)
+            cv2.putText(frame, f"track_id - {track_id}", (cx, cy),
+                        cv2.FONT_HERSHEY_DUPLEX, 1, track_color, 2)
             class_id = class_mapper[annot['class_id']]
             cx = dets[0] + 30
             cy = dets[1] - 40
-            cv2.putText(frame, f"class - {class_id}", (cx, cy), cv2.FONT_HERSHEY_DUPLEX, 1, class_color, 2)
+            cv2.putText(frame, f"class - {class_id}", (cx, cy),
+                        cv2.FONT_HERSHEY_DUPLEX, 1, class_color, 2)
 
-    
     frame = cv2.resize(frame, (720, 480))
     cv2.imshow('window', frame)
 
