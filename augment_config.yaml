@@ -33,6 +33,7 @@ min_duration: 30
 max_duration: 150 # 5 * 30
 
 # Maximum number of objects in the frame
+min_n_objects: 0
 max_n_objects: 5
 # Generation probability of 1 object: 1 / gen_prob
 gen_prob: 30
@@ -51,4 +52,4 @@ use_alpha:  False
 # 0 = nothing
 # 1 + bboxes and offset point
 # 2 + effect info
-debug_level: 1
+debug_level: 0

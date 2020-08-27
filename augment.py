@@ -56,6 +56,7 @@ class Augmentations:
     min_duration: int = 30
     max_duration: int = 150
 
+    min_n_objects: int = 0
     max_n_objects: int = 5
     gen_prob: int = 30
     next_gen_prob: int = 50
@@ -211,7 +212,9 @@ class Augmentations:
             self.put_text(frame, '-'.join(text[j:j + 2]), position)
 
     def augment(self, frame, frame_num, writer=None):
-        # Add new effect
+        # Add new effects
+        while len(self.objects) < self.min_n_objects:
+            self.create_effect(frame)
         gen_prob = np.random.randint(self.gen_prob + len(self.objects) * self.next_gen_prob)
         if len(self.objects) < self.max_n_objects and gen_prob == 0:
             self.create_effect(frame)
