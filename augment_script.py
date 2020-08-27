@@ -149,7 +149,7 @@ if __name__ == "__main__":
         process_video(args.in_path, augmentations, args.out_path, coco_writer, args.show_debug)
     else:
         os.makedirs(args.out_path, exist_ok=True)
-        images = glob(os.path.join(args.in_path, '*.png'))
+        images = glob(os.path.join(args.in_path, '*.jpg'))
         process_images(images, augmentations, args.out_path, coco_writer, args.show_debug)
 
     # Write annotations.
