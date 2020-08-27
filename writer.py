@@ -2,8 +2,6 @@ import json
 
 import numpy as np
 
-from bbox_utils import get_corners
-
 
 class COCO_writer:
 
@@ -36,30 +34,28 @@ class COCO_writer:
     def add_frame(self, height, width, filename):
         self.images.append({
             'height': height,
-            'date_captured': 0,
+            'date_captured': None,
+            'dataset': 'Roadar',
             'id': len(self.images) + 1,
             'file_name': filename,
-            'flickr_url': "",
-            'coco_url': "",
+            'image': filename,
+            'flickr_url': None,
+            'coco_url': None,
             'width': width,
-            'license': 0,
+            'license': None,
         })
 
     def add_annotation(self, image_id, bbox, track_id, category_id):
         area = int(bbox[1] * bbox[3])
-        segmentation = get_corners(np.expand_dims(bbox, axis=0))
 
         self.annotations.append({
             'image_id': image_id,
-            'segmentation': segmentation.astype(int).tolist(),
+            'segmentation': None,
             'iscrowd': 0,
             'bbox': bbox.astype(int).tolist(),
-            'attributes': {
-                'occluded': False,
-                'keyframe': True,
-                'track_id': track_id,
-            },
+            'attributes': {},
             'area': area,
+            'is_occluded': False,
             'id': len(self.annotations) + 1,
             'category_id': category_id,
         })
@@ -70,18 +66,7 @@ class COCO_writer:
         result['annotations'] = self.annotations
         result['categories'] = self.categories
         result['images'] = self.images
-        result['licenses'] = [{
-            'id': 0,
-            'url': '',
-            'name': '',
-        }]
-        result['info'] = {
-            'date_created': '',
-            'version': '',
-            'contributor': '',
-            'description': '',
-            'year': '',
-            'url': '',
-        }
+        result['licenses'] = None
+        result['info'] = None
         with open(save_path, 'w') as out_file:
             json.dump(result, out_file)

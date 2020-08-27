@@ -45,20 +45,25 @@ class Augmentations:
 
     do_brightness: bool = True
     gain_loc: float = 1
-    gain_scale: float = 0.15
+    gain_scale: float = 0.075
     bias_loc: float = 0
-    bias_scale: float = 10
+    bias_scale: float = 5
 
     do_gamma: bool = True
-    gamma_from: float = 0.25
-    gamma_to: float = 2
+    gamma_from: float = 0.5
+    gamma_to: float = 1.5
 
     min_duration: int = 30
     max_duration: int = 150
+
     max_n_objects: int = 5
+    gen_prob: int = 30
+    next_gen_prob: int = 50
+
     debug_level: int = 0
     ck_start: int = 10
     ck_range: int = 20
+    use_alpha: bool = False
 
     def __init__(self, png_effects, mov_effects,
                  config_path=None, **kwargs):
@@ -202,8 +207,8 @@ class Augmentations:
 
     def augment(self, frame, frame_num, writer=None):
         # Add new effect
-        if (len(self.objects) < self.max_n_objects
-                and np.random.randint(30 + len(self.objects) * 50) == 0):
+        gen_prob = np.random.randint(self.gen_prob + len(self.objects) * self.next_gen_prob)
+        if len(self.objects) < self.max_n_objects and gen_prob == 0:
             self.create_effect(frame)
 
         # Display effects
@@ -223,13 +228,17 @@ class Augmentations:
                 if e_image is None:
                     eff_to_delete.append(i)
                     continue
-                # Color key black with everything < ck_start = 0
-                # and everything > ck_start + ck_range = 255
-                # (value - ck_start) / ck_range
-                hsv_e_image = cv2.cvtColor(e_image, cv2.COLOR_BGR2HSV)
-                v_e_image = hsv_e_image[:, :, 2:3].astype(np.int32)
-                e_alpha = np.clip((v_e_image - self.ck_start) / self.ck_range, 0, 1) * 255
-                e_alpha = e_alpha.astype(np.uint8)
+                if self.use_alpha:
+                    alpha_cap.set(cv2.CAP_PROP_POS_FRAMES, e_info.cur_dur)
+                    e_alpha = alpha_cap.read()[1]
+                else:
+                    # Color key black with everything < ck_start = 0
+                    # and everything > ck_start + ck_range = 255
+                    # (value - ck_start) / ck_range
+                    hsv_e_image = cv2.cvtColor(e_image, cv2.COLOR_BGR2HSV)
+                    v_e_image = hsv_e_image[:, :, 2:3].astype(np.int32)
+                    e_alpha = np.clip((v_e_image - self.ck_start) / self.ck_range, 0, 1) * 255
+                    e_alpha = e_alpha.astype(np.uint8)
                 # Concat with alpha channel
                 e_image = np.concatenate((e_image, e_alpha), -1)
                 # Get bboxes
