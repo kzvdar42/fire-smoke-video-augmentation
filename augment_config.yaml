@@ -25,7 +25,7 @@ bias_loc: 0
 bias_scale: 2.5
 
 # Gamma correction control
-do_gamma: False
+do_gamma: True
 gamma_from: 0.9
 gamma_to: 1.1
 
@@ -46,11 +46,11 @@ next_gen_prob: 0
 # and everything > ck_start + ck_range = 255 (fully visible)
 ck_start: 10
 ck_range: 20
-# Use alpha channel instead of color keing
-use_alpha:  False
+# Use alpha channel instead of color keying
+use_alpha:  True
 
 # Debug level:
 # 0 = nothing
 # 1 + bboxes and offset point
 # 2 + effect info
-debug_level: 0
+debug_level: 1

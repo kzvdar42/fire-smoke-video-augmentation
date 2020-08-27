@@ -134,6 +134,7 @@ fire-dataset
 source_videos/*
 test8
 effects/*
-!effects/prep*
+!effects/prep_fire*
+!effects/prep_smoke*
 output/*
 !output/run_annot.py

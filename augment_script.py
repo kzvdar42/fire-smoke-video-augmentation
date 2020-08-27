@@ -13,7 +13,7 @@ from bbox_utils import get_scale_ratio, resize_by_max_side
 
 
 def process_video(in_video_path, augmentations, out_path,
-                  writer=None, show_debug=False):
+                  writer=None, show_debug=False, write_debug=False):
     in_stream = cv2.VideoCapture(in_video_path)
 
     # Create writer
@@ -37,14 +37,14 @@ def process_video(in_video_path, augmentations, out_path,
             if writer:
                 writer.add_frame(*frame.shape[:2], image_name)
             for augment in augmentations:
-                frame = augment.augment(frame, frame_num, writer)
-            out_stream.write(frame)
+                frame, debug_frame = augment.augment(frame, frame_num, writer)
+            out_stream.write(debug_frame if write_debug else frame)
             pbar.update(1)
             frame_num += 1
 
             if show_debug:
-                frame = cv2.resize(frame, (1280, 720))
-                cv2.imshow('annotated', frame)
+                debug_frame = cv2.resize(debug_frame, (1280, 720))
+                cv2.imshow('Debug', debug_frame)
                 # Exit on key `q`.
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
@@ -73,7 +73,7 @@ def get_coco_writer():
 
 
 def process_images(image_paths, augmentations, out_path,
-                   writer=None, show_debug=False):
+                   writer=None, show_debug=False, write_debug=False):
     pbar = tqdm(total=len(image_paths))
     try:
         for image_num, image_path in enumerate(image_paths):
@@ -84,16 +84,16 @@ def process_images(image_paths, augmentations, out_path,
                 writer.add_frame(*image.shape[:2], image_name)
             # Augment
             for augment in augmentations:
-                image = augment.augment(image, image_num, writer)
+                image, debug_image = augment.augment(image, image_num, writer)
 
             # Write result
             out_image_path = os.path.join(out_path, image_name)
-            cv2.imwrite(out_image_path, image)
+            cv2.imwrite(out_image_path, debug_image if write_debug else image)
             pbar.update(1)
 
             if show_debug:
-                image = cv2.resize(image, (1280, 720))
-                cv2.imshow('annotated', image)
+                debug_image = cv2.resize(debug_image, (1280, 720))
+                cv2.imshow('Debug', debug_image)
                 # Exit on key `q`.
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
@@ -109,10 +109,12 @@ def get_args():
 
     parser.add_argument('in_path', help='path to the input')
     parser.add_argument('out_path', help='path for the output images')
-    parser.add_argument('--video', action='store_true',
-                        help='flag for video input')
+    parser.add_argument('--in_extention', default='jpg',
+                        help='in file extention, support png/jpg/mp4/avi')
     parser.add_argument('--show_debug', action='store_true',
                         help='show debug window')
+    parser.add_argument('--write_debug', action='store_true',
+                        help='write debug info to output')
     parser.add_argument('--e_png_path', default=None,
                         help='path for the png effects')
     parser.add_argument('--e_mov_path', default=None,
@@ -144,13 +146,15 @@ if __name__ == "__main__":
         augment
     ]
 
-    if args.video:
+    if args.in_extention in ['mp4', 'avi']:
         os.makedirs(os.path.split(args.out_path)[0], exist_ok=True)
-        process_video(args.in_path, augmentations, args.out_path, coco_writer, args.show_debug)
-    else:
+        process_video(args.in_path, augmentations, args.out_path, coco_writer, args.show_debug, args.write_debug)
+    elif args.in_extention in ['jpg', 'png']:
         os.makedirs(args.out_path, exist_ok=True)
-        images = glob(os.path.join(args.in_path, '*.jpg'))
-        process_images(images, augmentations, args.out_path, coco_writer, args.show_debug)
+        images = glob(os.path.join(args.in_path, f'*.{args.in_extention}'))
+        process_images(images, augmentations, args.out_path, coco_writer, args.show_debug, args.write_debug)
+    else:
+        raise ValueError(f'Unsupported extention! ({args.in_extention})')
 
     # Write annotations.
     if args.write_annotations:

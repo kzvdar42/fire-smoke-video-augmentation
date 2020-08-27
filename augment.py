@@ -211,6 +211,15 @@ class Augmentations:
             position = (e_info.offset[0], e_info.offset[1] + j * 15)
             self.put_text(frame, '-'.join(text[j:j + 2]), position)
 
+
+    def prepare_image(self, image):
+        if image.dtype == np.uint8:
+            return image
+        else:
+            image = image / np.iinfo(image.dtype).max * 255
+            return image.astype(np.uint8)
+
+
     def augment(self, frame, frame_num, writer=None):
         # Add new effects
         while len(self.objects) < self.min_n_objects:
@@ -221,10 +230,12 @@ class Augmentations:
 
         # Display effects
         eff_to_delete = []
+        debug_frame = frame.copy()
         for i,  e_info in enumerate(self.objects):
             # Get image
             if e_info.type == 'png':
                 e_image = self.loaded_png[e_info.idx]
+                e_image = self.prepare_image(e_image)
                 if writer is not None:
                     bboxes = self.png_annotations[e_info.idx][:, :4]
                     e_cats = self.png_annotations[e_info.idx][:, 4]
@@ -296,6 +307,9 @@ class Augmentations:
             # Apply effect on image
             frame = self.merge_images(frame, e_image, offset)
 
+            # Write debug info to independent image
+            debug_frame = frame.copy()
+
             # Move bboxes to offset position
             if bboxes is not None:
                 bboxes += np.hstack((offset, offset))
@@ -303,21 +317,21 @@ class Augmentations:
                 for bbox, cat in zip(bboxes, e_cats):
                     # Show annotations
                     if self.debug_level > 0:
-                        cv2.rectangle(frame, tuple(bbox[:2]), tuple(bbox[2:4]), (0, 0, 255), 3)
+                        cv2.rectangle(debug_frame, tuple(bbox[:2]), tuple(bbox[2:4]), (0, 0, 255), 3)
                     # Write annotations
                     if writer is not None:
                         bbox = convert_xyxy_xywh(bbox)
                         cat_id = writer.get_cat_id(cat)
                         writer.add_annotation(frame_num, bbox, e_info.track_id, cat_id)
                         if self.debug_level > 1:
-                            self.put_text(frame, cat, tuple(bbox[:2]))
+                            self.put_text(debug_frame, cat, tuple(bbox[:2]))
 
             # draw a point there offset is
             if self.debug_level > 0:
-                cv2.circle(frame, e_info.offset, 10, (0, 255, 0), 2)
+                cv2.circle(debug_frame, e_info.offset, 10, (0, 255, 0), 2)
             # Add effect info
             if self.debug_level > 1:
-                self.draw_effect_info(frame, e_info)
+                self.draw_effect_info(debug_frame, e_info)
 
             # Delete or update cur_dur
             if e_info.cur_dur >= e_info.duration:
@@ -329,4 +343,4 @@ class Augmentations:
         for i in sorted(eff_to_delete, reverse=True):
             del self.objects[i]
 
-        return frame
+        return frame, debug_frame
