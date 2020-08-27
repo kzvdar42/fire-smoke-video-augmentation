@@ -222,8 +222,11 @@ class Augmentations:
             # Get image
             if e_info.type == 'png':
                 e_image = self.loaded_png[e_info.idx]
-                bboxes = self.png_annotations[e_info.idx][:, :4]
-                e_cats = self.png_annotations[e_info.idx][:, 4]
+                if writer is not None:
+                    bboxes = self.png_annotations[e_info.idx][:, :4]
+                    e_cats = self.png_annotations[e_info.idx][:, 4]
+                else:
+                    bboxes, e_cats = [], []
             elif e_info.type == 'mov':
                 cap, alpha_cap = self.loaded_mov[e_info.idx]
                 annot = self.mov_annotations[e_info.idx]
