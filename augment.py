@@ -69,6 +69,7 @@ class Augmentations:
                  config_path=None, **kwargs):
         self.png_effects = png_effects
         self.mov_effects = mov_effects
+        assert len(png_effects) or len(mov_effects), "At least one effect!"
         self.objects = []
         self.last_object_id = -1
         # Load config
@@ -84,18 +85,8 @@ class Augmentations:
         self.png_annotations, self.mov_annotations = [], []
 
         # Load image annotations.
-        folder_path = os.path.split(self.png_effects[0])[0]
-        png_annot_path = os.path.join(folder_path, 'annotations.csv')
-        png_annotations = defaultdict(list)
-        if os.path.isfile(png_annot_path):
-            with open(png_annot_path) as in_file:
-                for line in in_file.readlines():
-                    category, x1, y1, x2, y2, img_name = line.split(',')[:6]
-                    png_annotations[img_name].append([*map(int, [x1, y1, x2, y2]), category])
-
-            for k, v in png_annotations.items():
-                png_annotations[k] = np.array(v)
-
+        if len(self.png_effects) > 0:
+            png_annotations = self.load_image_annotations()
         # Load images.
         for png_path in self.png_effects:
             effect = cv2.imread(png_path, cv2.IMREAD_UNCHANGED)
@@ -125,8 +116,22 @@ class Augmentations:
             else:
                 self.mov_annotations.append(None)
 
+    def load_image_annotations(self):
+        folder_path = os.path.split(self.png_effects[0])[0]
+        png_annot_path = os.path.join(folder_path, 'annotations.csv')
+        png_annotations = defaultdict(list)
+        if os.path.isfile(png_annot_path):
+            with open(png_annot_path) as in_file:
+                for line in in_file.readlines():
+                    category, x1, y1, x2, y2, img_name = line.split(',')[:6]
+                    png_annotations[img_name].append([*map(int, [x1, y1, x2, y2]), category])
+
+            for k, v in png_annotations.items():
+                png_annotations[k] = np.array(v)
+        return png_annotations
+
     def create_effect(self, frame):
-        if np.random.randint(2):
+        if len(self.png_effects) and (np.random.randint(2) or len(self.mov_effects) == 0):
             e_type = 'png'
             min_size, max_size = self.png_min_size, self.png_max_size
             idx = np.random.randint(len(self.png_effects))
@@ -231,6 +236,7 @@ class Augmentations:
                 if self.use_alpha:
                     alpha_cap.set(cv2.CAP_PROP_POS_FRAMES, e_info.cur_dur)
                     e_alpha = alpha_cap.read()[1]
+                    e_alpha = np.clip(np.expand_dims(np.sum(e_alpha, axis=2), -1), 0, 255).astype(np.uint8)
                 else:
                     # Color key black with everything < ck_start = 0
                     # and everything > ck_start + ck_range = 255
