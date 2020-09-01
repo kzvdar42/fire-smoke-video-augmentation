@@ -3,13 +3,21 @@ from glob import glob
 import numpy as np
 import json
 import argparse
+import threading
+from dataclasses import dataclass
 
 import cv2
 from tqdm import tqdm
 
 from augment import Augmentations
 from writer import COCO_writer
-from bbox_utils import get_scale_ratio, resize_by_max_side
+from bbox_utils import get_scale_ratio, resize_by_max_side, ImagesReader
+
+
+def process_image(frame, augmentations, writer=None, frame_num=None):
+    for augment in augmentations:
+        frame, debug_frame = augment.augment(frame, writer, frame_num)
+    return frame, debug_frame if debug_frame is not None else frame
 
 
 def process_video(in_video_path, augmentations, out_path,
@@ -22,7 +30,8 @@ def process_video(in_video_path, augmentations, out_path,
     frame_rate = int(in_stream.get(cv2.CAP_PROP_FPS))
     total_frames = int(in_stream.get(cv2.CAP_PROP_FRAME_COUNT))
     fourcc = cv2.VideoWriter_fourcc(*'MPEG')
-    out_stream = cv2.VideoWriter(out_path, fourcc, frame_rate, (frame_width, frame_height))
+    out_stream = cv2.VideoWriter(out_path, fourcc, frame_rate,
+                                 (frame_width, frame_height))
 
     pbar = tqdm(total=total_frames)
     frame_num = 0
@@ -33,27 +42,23 @@ def process_video(in_video_path, augmentations, out_path,
                 print("No image in the stream, stopping.")
                 break
 
-            image_name = f'image_{10:06d}.jpg'
             if writer:
+                image_name = f'image_{frame_num:06d}.jpg'
                 writer.add_frame(*frame.shape[:2], image_name)
-            for augment in augmentations:
-                frame, debug_frame = augment.augment(frame, frame_num, writer)
+            frame, debug_frame = process_image(frame, augmentations, writer, frame_num)
             out_stream.write(debug_frame if write_debug else frame)
             pbar.update(1)
             frame_num += 1
 
-            if show_debug:
-                debug_frame = cv2.resize(debug_frame, (1280, 720))
-                cv2.imshow('Debug', debug_frame)
-                # Exit on key `q`.
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
+            if show_debug and draw_debug(debug_frame):
+                break
     except KeyboardInterrupt:
         print('Exited.')
     finally:
         # Close streams.
         in_stream.release()
         out_stream.release()
+        pbar.close()
         cv2.destroyAllWindows()
 
 
@@ -73,34 +78,45 @@ def get_coco_writer():
 
 
 def process_images(image_paths, augmentations, out_path,
-                   writer=None, show_debug=False, write_debug=False):
+                   writer=None, show_debug=False, write_debug=False, n_workers=None):
+
+    def _process_image(image, augmentations, writer, image_num,
+                       out_ipath, write_debug):
+        image, debug_image = process_image(image, augmentations, writer, image_num)
+        out_img = debug_image if write_debug else image
+        threading.Thread(target=cv2.imwrite, args=(out_ipath, out_img)).start()
+        return debug_image
+
+    image_reader = ImagesReader(image_paths, buffer_size=32)
     pbar = tqdm(total=len(image_paths))
+    # threads = []
     try:
-        for image_num, image_path in enumerate(image_paths):
+        for image_num, (image_path, image) in enumerate(image_reader):
             image_name = os.path.split(image_path)[1]
-            image = cv2.imread(image_path)
-            # Write image info.
+            out_ipath = os.path.join(out_path, image_name)
             if writer:
                 writer.add_frame(*image.shape[:2], image_name)
-            # Augment
-            for augment in augmentations:
-                image, debug_image = augment.augment(image, image_num, writer)
-
-            # Write result
-            out_image_path = os.path.join(out_path, image_name)
-            cv2.imwrite(out_image_path, debug_image if write_debug else image)
+            args = (image, augmentations, writer,
+                    image_num, out_ipath, write_debug)
+            debug_image = _process_image(*args)
+            # while len(threads) > n_workers:
+            #     threads[0].join()
+            #     threads = [thread for thread in threads if thread.is_alive()]
+            # thread = threading.Thread(target=_process_image, args=args)
+            # thread.start()
+            # threads.append(thread)
             pbar.update(1)
 
             if show_debug:
-                debug_image = cv2.resize(debug_image, (1280, 720))
-                cv2.imshow('Debug', debug_image)
-                # Exit on key `q`.
+                debug_frame = cv2.resize(debug_frame, (1280, 720))
+                cv2.imshow('Debug', debug_frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
     except KeyboardInterrupt:
         print('Exited.')
     finally:
         # Close streams.
+        pbar.close()
         cv2.destroyAllWindows()
 
 
@@ -121,6 +137,8 @@ def get_args():
                         help='path for the mov effects')
     parser.add_argument('--write_annotations',
                         action='store_true', help='Write the coco annotations')
+    parser.add_argument('--n_workers', default=None,
+                        type=int, help='number of threads to use')
     parser.add_argument('--e_config', default=None,
                         help='path to the config file for augmentations')
     return parser.parse_args()
@@ -129,11 +147,14 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
 
+    print('OpenCV is optimized:', cv2.useOptimized())
+    # sys.setcheckinterval
+
     coco_writer = get_coco_writer() if args.write_annotations else None
 
     # Get path for effects
     e_png = glob(os.path.join(args.e_png_path, '*.png')) if args.e_png_path else []
-    e_mov = glob(os.path.join(args.e_mov_path, '*.webm'))  if args.e_mov_path else []
+    e_mov = glob(os.path.join(args.e_mov_path, '*.webm')) if args.e_mov_path else []
 
     # Augmentations
     augment = Augmentations(
@@ -148,11 +169,13 @@ if __name__ == "__main__":
 
     if args.in_extention in ['mp4', 'avi']:
         os.makedirs(os.path.split(args.out_path)[0], exist_ok=True)
-        process_video(args.in_path, augmentations, args.out_path, coco_writer, args.show_debug, args.write_debug)
+        process_video(args.in_path, augmentations, args.out_path,
+                      coco_writer, args.show_debug, args.write_debug)
     elif args.in_extention in ['jpg', 'png']:
         os.makedirs(args.out_path, exist_ok=True)
         images = glob(os.path.join(args.in_path, f'*.{args.in_extention}'))
-        process_images(images, augmentations, args.out_path, coco_writer, args.show_debug, args.write_debug)
+        process_images(images, augmentations, args.out_path, coco_writer,
+                       args.show_debug, args.write_debug, args.n_workers)
     else:
         raise ValueError(f'Unsupported extention! ({args.in_extention})')
 

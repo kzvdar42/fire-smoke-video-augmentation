@@ -1,6 +1,63 @@
 # Part of the code is from https://github.com/Paperspace/DataAugmentationForObjectDetection.
 import cv2
 import numpy as np
+from threading import Thread, Lock
+from itertools import cycle
+
+
+def synchronized(func):
+    """Decorator for the syncronized usage of the function."""
+    func.__lock__ = Lock()
+
+    def synced_func(*args, **kws):
+        with func.__lock__:
+            return func(*args, **kws)
+
+    return synced_func
+
+
+class ImagesReader:
+    def __init__(self, images, buffer_size=32):
+        self.images = images
+        self.total = len(images)
+        self.buffer_size = buffer_size
+        self.next_id = 0
+        self.buffer = []
+        self._fill_buffer()
+
+    def is_open(self):
+        return self.__is_open() or len(self.buffer)
+
+    def __is_open(self):
+        return self.next_id < self.total
+
+    @synchronized
+    def __get_next_id(self):
+        old_next_id = self.next_id
+        self.next_id += 1
+        return old_next_id
+
+    def __read_to_buffer(self):
+        image_path = self.images[self.__get_next_id()]
+        self.buffer.append((image_path, cv2.imread(image_path)))
+
+    @synchronized
+    def _fill_buffer(self):
+        if self.__is_open():
+            for _ in range(self.buffer_size - len(self.buffer)):
+                Thread(target=self.__read_to_buffer).start()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if not self.is_open():
+            raise StopIteration
+        while self.is_open():
+            if len(self.buffer):
+                if self.__is_open():
+                    Thread(target=self.__read_to_buffer).start()
+                return self.buffer.pop()
 
 
 def resize(image, size, bboxes=None):
@@ -51,7 +108,7 @@ def rotate(image, angle, bboxes=None):
 
 
 def gamma_correction(image, gamma=1):
-    lut = np.clip(pow(np.array([range(256)]) / 255.0, gamma) * 255.0, 0, 255)
+    lut = pow(np.array([range(256)], dtype=np.float32) / 255.0, gamma) * 255.0
     lut = lut.astype(np.uint8)
     return cv2.LUT(image, lut)
 
@@ -69,11 +126,11 @@ def get_scale_ratio(img, to_max_size):
 
     :param img: image to scale
     :param to_max_size: max image size after the scale."""
-    return to_max_size / np.max(img.shape[:2])
+    return np.divide(to_max_size, np.max(img.shape[:2]), dtype=np.float32)
 
 
 def resize_by_max_side(img, ratio):
-    resize_shape = (np.array(img.shape[:2][::-1]) * ratio).astype(np.uint)
+    resize_shape = (np.array(img.shape[:2][::-1], dtype=np.float32) * ratio).astype(np.uint)
     return cv2.resize(img, tuple(resize_shape))
 
 
@@ -137,8 +194,7 @@ def rotate_im(image, angle):
     M[1, 2] += (nH / 2) - cY
 
     # perform the actual rotation and return the image
-    image = cv2.warpAffine(image, M, (nW, nH))
-    return image
+    return cv2.warpAffine(image, M, (nW, nH))
 
 
 def get_corners(bboxes):

@@ -149,8 +149,9 @@ class Augmentations:
         size = np.random.randint(min_size, max_size)
         angle = np.random.uniform(-self.max_angle, self.max_angle)
         # Make offset such that at least `min_size` of object is still visible.
-        offset = (np.random.randint(-size // 2 + min_size, frame.shape[1] - min_size),
-                  np.random.randint(min_size, frame.shape[0] - min_size))
+        low_x = -size // 2 + min_size
+        offset = (np.random.randint(low_x, max(frame.shape[1] - min_size, low_x + 1)),
+                  np.random.randint(min_size, max(frame.shape[0] - min_size, min_size + 1)))
         is_flip = np.random.randint(self.flip_chance) == 0
         gain = np.random.normal(loc=self.gain_loc, scale=self.gain_scale)
         bias = np.random.normal(loc=self.bias_loc, scale=self.bias_scale)
@@ -163,12 +164,11 @@ class Augmentations:
 
     def merge_images(self, img1, img2, offset=None):
         offset = offset if offset is not None else (0, 0)
-        img1 = img1.copy()
         # Get application mask
-        mask = img2[:, :, 3:] / 255
+        mask = img2[:, :, 3:].astype(np.float32) / 255
         # Left top coordinates
-        x1, y1 = np.clip(offset, 0, None)
-        img2_x1, img2_y1 = - np.clip(offset, None, 0)
+        def get_coords(x): return (x, 0) if x >= 0 else (0, -x)
+        (x1, img2_x1), (y1, img2_y1) = map(get_coords, offset)
         # Down right coordinates
         height, width = img1[y1: y1 + img2.shape[0] -
                              img2_y1, x1: x1 + img2.shape[1] - img2_x1, 0].shape
@@ -176,8 +176,10 @@ class Augmentations:
         img2_x2, img2_y2 = img2_x1 + width, img2_y1 + height
         # Merge using mask
         mask = mask[img2_y1:img2_y2, img2_x1:img2_x2]
-        img1[y1: y2, x1: x2] = (img2[img2_y1:img2_y2, img2_x1:img2_x2, :3] * mask
-                                + img1[y1:y2, x1: x2] * (1 - mask))
+        a, b = img2[img2_y1:img2_y2, img2_x1:img2_x2, :3], img1[y1:y2, x1: x2]
+        # a, b, mask = np.asfortranarray(a), np.asfortranarray(b), np.asfortranarray(mask)
+        # a, b, mask = a.reshape(a.shape, order='F'), b.reshape(b.shape, order='F'), mask.reshape(mask.shape, order='F')
+        img1[y1: y2, x1: x2] = a * mask + b * (1 - mask)
         img1[y1: y2, x1: x2] = cv2.convertScaleAbs(img1[y1: y2, x1: x2])
         return img1
 
@@ -211,7 +213,6 @@ class Augmentations:
             position = (e_info.offset[0], e_info.offset[1] + j * 15)
             self.put_text(frame, '-'.join(text[j:j + 2]), position)
 
-
     def prepare_image(self, image):
         if image.dtype == np.uint8:
             return image
@@ -219,8 +220,7 @@ class Augmentations:
             image = image / np.iinfo(image.dtype).max * 255
             return image.astype(np.uint8)
 
-
-    def augment(self, frame, frame_num, writer=None):
+    def augment(self, frame, writer=None, frame_num=None):
         # Add new effects
         while len(self.objects) < self.min_n_objects:
             self.create_effect(frame)
@@ -230,7 +230,7 @@ class Augmentations:
 
         # Display effects
         eff_to_delete = []
-        debug_frame = frame.copy()
+        debug_frame = None
         for i,  e_info in enumerate(self.objects):
             # Get image
             if e_info.type == 'png':
@@ -274,7 +274,7 @@ class Augmentations:
                         bboxes.append(convert_xywh_xyxy(obj['bbox'], width, height))
                         e_cats.append(annot.cats[obj['category_id']]['name'])
 
-            bboxes = np.array(bboxes).astype(np.float64)
+            bboxes = np.array(bboxes).astype(np.float32)
             if len(bboxes) == 0:
                 bboxes = None
 
@@ -308,7 +308,8 @@ class Augmentations:
             frame = self.merge_images(frame, e_image, offset)
 
             # Write debug info to independent image
-            debug_frame = frame.copy()
+            if self.debug_level > 0:
+                debug_frame = frame.copy()
 
             # Move bboxes to offset position
             if bboxes is not None:

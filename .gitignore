@@ -136,5 +136,6 @@ test8
 effects/*
 !effects/prep_fire*
 !effects/prep_smoke*
+ufa
 output/*
 !output/run_annot.py
