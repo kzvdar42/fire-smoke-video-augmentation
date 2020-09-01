@@ -1,4 +1,5 @@
 import os
+import shutil
 from glob import glob
 import numpy as np
 import json
@@ -18,6 +19,13 @@ def process_image(frame, augmentations, writer=None, frame_num=None):
     for augment in augmentations:
         frame, debug_frame = augment.augment(frame, writer, frame_num)
     return frame, debug_frame if debug_frame is not None else frame
+
+
+def _process_image(image, augmentations, writer, image_num, out_ipath, write_debug):
+        image, debug_image = process_image(image, augmentations, writer, image_num)
+        out_img = debug_image if write_debug else image
+        threading.Thread(target=cv2.imwrite, args=(out_ipath, out_img)).start()
+        return debug_image
 
 
 def process_video(in_video_path, augmentations, out_path,
@@ -79,14 +87,6 @@ def get_coco_writer():
 
 def process_images(image_paths, augmentations, out_path,
                    writer=None, show_debug=False, write_debug=False, n_workers=None):
-
-    def _process_image(image, augmentations, writer, image_num,
-                       out_ipath, write_debug):
-        image, debug_image = process_image(image, augmentations, writer, image_num)
-        out_img = debug_image if write_debug else image
-        threading.Thread(target=cv2.imwrite, args=(out_ipath, out_img)).start()
-        return debug_image
-
     image_reader = ImagesReader(image_paths, buffer_size=32)
     pbar = tqdm(total=len(image_paths))
     # threads = []
@@ -119,6 +119,13 @@ def process_images(image_paths, augmentations, out_path,
         pbar.close()
         cv2.destroyAllWindows()
 
+def clean_folder_content(path):
+    for root, dirs, files in os.walk(path):
+        for f in files:
+            os.unlink(os.path.join(root, f))
+        for d in dirs:
+            shutil.rmtree(os.path.join(root, d))
+
 
 def get_args():
     parser = argparse.ArgumentParser(description='Video augmentation.')
@@ -137,6 +144,8 @@ def get_args():
                         help='path for the mov effects')
     parser.add_argument('--write_annotations',
                         action='store_true', help='Write the coco annotations')
+    parser.add_argument('--clean_out',
+                        action='store_true', help='Clean out folder before starting')
     parser.add_argument('--n_workers', default=None,
                         type=int, help='number of threads to use')
     parser.add_argument('--e_config', default=None,
@@ -166,13 +175,18 @@ if __name__ == "__main__":
     augmentations = [
         augment
     ]
+    
+    try:
+        os.makedirs(args.out_path)
+    except OSError:
+        if args.clean_out:
+            clean_folder_content(args.out_path)
 
     if args.in_extention in ['mp4', 'avi']:
-        os.makedirs(os.path.split(args.out_path)[0], exist_ok=True)
-        process_video(args.in_path, augmentations, args.out_path,
+        out_path = os.path.join(args.out_path, 'out.mp4')
+        process_video(args.in_path, augmentations, out_path,
                       coco_writer, args.show_debug, args.write_debug)
     elif args.in_extention in ['jpg', 'png']:
-        os.makedirs(args.out_path, exist_ok=True)
         images = glob(os.path.join(args.in_path, f'*.{args.in_extention}'))
         process_images(images, augmentations, args.out_path, coco_writer,
                        args.show_debug, args.write_debug, args.n_workers)

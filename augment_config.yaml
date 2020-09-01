@@ -29,11 +29,19 @@ do_gamma: True
 gamma_from: 0.9
 gamma_to: 1.1
 
+min_transparency: 70
+max_transparency: 70
+
+# Blur contour of effect
+do_blur: True
+blur_radius: 5
+contour_radius: 5
+
 # Duration limits for `png` effects
 min_duration: 1
 max_duration: 2 # 5 * 30
 
-# Maximum number of objects in the frame
+# Number of objects in the frame
 min_n_objects: 1
 max_n_objects: 1
 # Generation probability of 1 object: 1 / gen_prob
@@ -53,4 +61,4 @@ use_alpha:  True
 # 0 = nothing
 # 1 + bboxes and offset point
 # 2 + effect info
-debug_level: 1
+debug_level: 2

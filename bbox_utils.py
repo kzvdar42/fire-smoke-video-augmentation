@@ -113,6 +113,23 @@ def gamma_correction(image, gamma=1):
     return cv2.LUT(image, lut)
 
 
+def blur_contour(image, blur_radius, contour_radius):
+    image, alpha = image[:, :, :3], image[:, :, 3:]
+
+    # gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # thresh = cv2.threshold(gray, 1, 255, cv2.THRESH_BINARY)[1]
+    contours, _ = cv2.findContours(alpha.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    
+    b_rad = (blur_radius, blur_radius)
+    blurred_img = cv2.GaussianBlur(image, b_rad, 0)
+    alpha[:, :, 0] = cv2.GaussianBlur(alpha, b_rad, 0)
+
+    mask = np.zeros((*image.shape[:2], 1), np.ubyte)
+    cv2.drawContours(mask, contours, -1, (1), contour_radius)
+    output = np.where(mask, blurred_img, image)
+    return np.concatenate((output, alpha), -1)
+
+
 def from_ratio_to_pixel(boxes, width, height):
     boxes[:, 0] *= width
     boxes[:, 1] *= height

@@ -6,10 +6,9 @@ import yaml
 import cv2
 import numpy as np
 from pycocotools.coco import COCO
-from bbox_utils import (rotate_im, get_corners, rotate_box,
-                        get_enclosing_box, from_ratio_to_pixel,
-                        convert_xywh_xyxy, convert_xyxy_xywh,
-                        resize, rotate, flip, gamma_correction)
+from bbox_utils import (convert_xywh_xyxy, convert_xyxy_xywh,
+                        resize, rotate, flip, gamma_correction,
+                        blur_contour)
 
 
 @dataclass
@@ -21,6 +20,7 @@ class Effect:
     offset: tuple
     angle: float
     is_flip: bool
+    transparency: float
     gain: float  # contrast
     bias: float  # brightness
     gamma: float  # gamma correction
@@ -53,10 +53,17 @@ class Augmentations:
     gamma_from: float = 0.5
     gamma_to: float = 1.5
 
+    do_blur: bool = True
+    blur_radius: int = 5
+    contour_radius: int = 5
+
+    min_transparency: int = 50
+    max_transparency: int = 100
+
     min_duration: int = 30
     max_duration: int = 150
 
-    min_n_objects: int = 0
+    min_n_objects: int = 1
     max_n_objects: int = 5
     gen_prob: int = 30
     next_gen_prob: int = 50
@@ -90,8 +97,11 @@ class Augmentations:
             png_annotations = self.load_image_annotations()
         # Load images.
         for png_path in self.png_effects:
-            effect = cv2.imread(png_path, cv2.IMREAD_UNCHANGED)
-            self.loaded_png.append(effect)
+            e_image = cv2.imread(png_path, cv2.IMREAD_UNCHANGED)
+            e_image = self.prepare_image(e_image)
+            # Apply alpha
+            e_image[:, :, :3] = e_image[:, :, :3] * (e_image[:, :, 3:] / 255)
+            self.loaded_png.append(e_image)
             png_file_name = os.path.split(png_path)[1]
             self.png_annotations.append(png_annotations[png_file_name])
 
@@ -147,19 +157,20 @@ class Augmentations:
             cap.release()
             del cap
         size = np.random.randint(min_size, max_size)
-        angle = np.random.uniform(-self.max_angle, self.max_angle)
+        angle = np.float32(np.random.uniform(-self.max_angle, self.max_angle))
         # Make offset such that at least `min_size` of object is still visible.
         low_x = -size // 2 + min_size
         offset = (np.random.randint(low_x, max(frame.shape[1] - min_size, low_x + 1)),
                   np.random.randint(min_size, max(frame.shape[0] - min_size, min_size + 1)))
         is_flip = np.random.randint(self.flip_chance) == 0
-        gain = np.random.normal(loc=self.gain_loc, scale=self.gain_scale)
-        bias = np.random.normal(loc=self.bias_loc, scale=self.bias_scale)
-        gamma = np.random.uniform(self.gamma_from, self.gamma_to)
+        transparency = np.float32(np.random.uniform(self.min_transparency, self.max_transparency) / 100)
+        gain = np.float32(np.random.normal(loc=self.gain_loc, scale=self.gain_scale))
+        bias = np.float32(np.random.normal(loc=self.bias_loc, scale=self.bias_scale))
+        gamma = np.float32(np.random.uniform(self.gamma_from, self.gamma_to))
         # Add object to our dict.
         self.last_object_id += 1
         self.objects.append(Effect(e_type, idx, self.last_object_id,
-                                   size, offset, angle, is_flip,
+                                   size, offset, angle, is_flip, transparency,
                                    gain, bias, gamma, duration, 0))
 
     def merge_images(self, img1, img2, offset=None):
@@ -196,7 +207,8 @@ class Augmentations:
         effects = self.png_effects if e_info.type == 'png' else self.mov_effects
         effect_filename = os.path.split(effects[e_info.idx])[1]
 
-        text = [f'{effect_filename}', f'offset: {e_info.offset}']
+        text = [f'{effect_filename}', f'offset: {e_info.offset}',
+                f'alpha: {e_info.transparency:.2f}']
         if self.do_flip:
             text.append(f'flip: {e_info.is_flip:1d}')
         if self.do_resize:
@@ -213,7 +225,8 @@ class Augmentations:
             position = (e_info.offset[0], e_info.offset[1] + j * 15)
             self.put_text(frame, '-'.join(text[j:j + 2]), position)
 
-    def prepare_image(self, image):
+    @staticmethod
+    def prepare_image(image):
         if image.dtype == np.uint8:
             return image
         else:
@@ -232,15 +245,13 @@ class Augmentations:
         eff_to_delete = []
         debug_frame = None
         for i,  e_info in enumerate(self.objects):
+            bboxes, e_cats = [], []
             # Get image
             if e_info.type == 'png':
-                e_image = self.loaded_png[e_info.idx]
-                e_image = self.prepare_image(e_image)
+                e_image = self.loaded_png[e_info.idx].copy()
                 if writer is not None:
                     bboxes = self.png_annotations[e_info.idx][:, :4]
                     e_cats = self.png_annotations[e_info.idx][:, 4]
-                else:
-                    bboxes, e_cats = [], []
             elif e_info.type == 'mov':
                 cap, alpha_cap = self.loaded_mov[e_info.idx]
                 annot = self.mov_annotations[e_info.idx]
@@ -253,7 +264,7 @@ class Augmentations:
                 if self.use_alpha:
                     alpha_cap.set(cv2.CAP_PROP_POS_FRAMES, e_info.cur_dur)
                     e_alpha = alpha_cap.read()[1]
-                    e_alpha = np.clip(np.expand_dims(np.sum(e_alpha, axis=2), -1), 0, 255).astype(np.uint8)
+                    e_alpha = np.clip(np.expand_dims(np.sum(e_alpha, axis=2), -1), 0, 255, dtype=np.uint8)
                 else:
                     # Color key black with everything < ck_start = 0
                     # and everything > ck_start + ck_range = 255
@@ -265,7 +276,6 @@ class Augmentations:
                 # Concat with alpha channel
                 e_image = np.concatenate((e_image, e_alpha), -1)
                 # Get bboxes
-                bboxes, e_cats = [], []
                 if annot is not None:
                     height, width = e_image.shape[:2]
                     ann_ids = annot.getAnnIds(
@@ -274,13 +284,13 @@ class Augmentations:
                         bboxes.append(convert_xywh_xyxy(obj['bbox'], width, height))
                         e_cats.append(annot.cats[obj['category_id']]['name'])
 
-            bboxes = np.array(bboxes).astype(np.float32)
             if len(bboxes) == 0:
                 bboxes = None
-
-            # Resize image
-            if self.do_resize:
-                e_image, bboxes = resize(e_image, e_info.size, bboxes)
+            else:
+                bboxes = np.array(bboxes, dtype=np.float32)
+            
+            # Transparency
+            e_image[:, :, 3:] = e_image[:, :, 3:] * e_info.transparency
 
             # Flip image
             if self.do_flip and e_info.is_flip:
@@ -299,6 +309,14 @@ class Augmentations:
             # Rotate image
             if self.do_rotate and e_info.angle:
                 e_image, bboxes = rotate(e_image, e_info.angle, bboxes)
+            
+            if self.do_blur:
+                e_image = blur_contour(e_image,
+                    self.blur_radius, self.contour_radius)
+
+            # Resize image
+            if self.do_resize:
+                e_image, bboxes = resize(e_image, e_info.size, bboxes)
 
             offset = e_info.offset
             offset = (offset[0] - e_image.shape[1] //
