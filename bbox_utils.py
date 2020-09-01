@@ -23,6 +23,7 @@ class ImagesReader:
         self.buffer_size = buffer_size
         self.next_id = 0
         self.buffer = []
+        self.threads = []
         self._fill_buffer()
 
     def is_open(self):
@@ -41,11 +42,28 @@ class ImagesReader:
         image_path = self.images[self.__get_next_id()]
         self.buffer.append((image_path, cv2.imread(image_path)))
 
+    def start_new_thread(self):
+        thread = Thread(target=self.__read_to_buffer, name=str(self.next_id))
+        thread.start()
+        self.threads.append(thread)
+
+    @synchronized
+    def clean_threads(self):
+        threads, self.threads = self.threads, []
+        threads = [thread for thread in threads if not thread.is_alive()]
+        self.threads.extend(threads)
+
+    @synchronized
+    def join_threads(self):
+        threads, self.threads = self.threads, []
+        for thread in threads:
+            thread.join()
+
     @synchronized
     def _fill_buffer(self):
         if self.__is_open():
             for _ in range(self.buffer_size - len(self.buffer)):
-                Thread(target=self.__read_to_buffer).start()
+                self.start_new_thread()
 
     def __iter__(self):
         return self
@@ -56,8 +74,8 @@ class ImagesReader:
         while self.is_open():
             if len(self.buffer):
                 if self.__is_open():
-                    Thread(target=self.__read_to_buffer).start()
-                return self.buffer.pop()
+                    self.start_new_thread()
+                return self.buffer.pop(0)
 
 
 def resize(image, size, bboxes=None):

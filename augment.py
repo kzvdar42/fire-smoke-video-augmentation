@@ -146,7 +146,7 @@ class Augmentations:
             e_type = 'png'
             min_size, max_size = self.png_min_size, self.png_max_size
             idx = np.random.randint(len(self.png_effects))
-            duration = np.random.randint(self.min_duration, self.max_duration)
+            duration = np.random.randint(self.min_duration, self.max_duration + 1)
         else:
             e_type = 'mov'
             min_size, max_size = self.mov_min_size, self.mov_max_size
@@ -156,7 +156,7 @@ class Augmentations:
             duration = np.random.randint(min(self.min_duration, total_frames) - 1, total_frames)
             cap.release()
             del cap
-        size = np.random.randint(min_size, max_size)
+        size = np.random.randint(min_size, max_size + 1)
         angle = np.float32(np.random.uniform(-self.max_angle, self.max_angle))
         # Make offset such that at least `min_size` of object is still visible.
         low_x = -size // 2 + min_size
@@ -351,12 +351,11 @@ class Augmentations:
             # Add effect info
             if self.debug_level > 1:
                 self.draw_effect_info(debug_frame, e_info)
-
-            # Delete or update cur_dur
+            
+            # Update/Delete cur_dur
+            e_info.cur_dur += 1
             if e_info.cur_dur >= e_info.duration:
                 eff_to_delete.append(i)
-            else:
-                e_info.cur_dur += 1
 
         # Delete expired effects
         for i in sorted(eff_to_delete, reverse=True):

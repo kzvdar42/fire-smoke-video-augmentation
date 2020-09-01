@@ -87,7 +87,8 @@ def get_coco_writer():
 
 def process_images(image_paths, augmentations, out_path,
                    writer=None, show_debug=False, write_debug=False, n_workers=None):
-    image_reader = ImagesReader(image_paths, buffer_size=32)
+    buffer_size = 32
+    image_reader = ImagesReader(image_paths, buffer_size=buffer_size)
     pbar = tqdm(total=len(image_paths))
     # threads = []
     try:
@@ -187,8 +188,9 @@ if __name__ == "__main__":
         process_video(args.in_path, augmentations, out_path,
                       coco_writer, args.show_debug, args.write_debug)
     elif args.in_extention in ['jpg', 'png']:
-        images = glob(os.path.join(args.in_path, f'*.{args.in_extention}'))
-        process_images(images, augmentations, args.out_path, coco_writer,
+        image_paths = glob(os.path.join(args.in_path, f'*.{args.in_extention}'))
+        image_paths.sort(key=lambda s: int(os.path.splitext(os.path.split(s)[1])[0].split('-')[-1]))
+        process_images(image_paths, augmentations, args.out_path, coco_writer,
                        args.show_debug, args.write_debug, args.n_workers)
     else:
         raise ValueError(f'Unsupported extention! ({args.in_extention})')
