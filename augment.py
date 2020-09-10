@@ -59,8 +59,10 @@ class Augmentations:
     min_transparency: int = 50
     max_transparency: int = 100
 
-    min_duration: int = 30
-    max_duration: int = 150
+    png_min_duration: int = 30
+    png_max_duration: int = 150
+    mov_min_duration: int = 30
+    mov_max_duration: int = 150
 
     min_n_objects: int = 1
     max_n_objects: int = 5
@@ -94,12 +96,15 @@ class Augmentations:
         if isinstance(reader, ImageEffectReader):
             min_size, max_size = self.png_min_size, self.png_max_size
             idx = np.random.randint(len(reader.loaded))
-            duration = np.random.randint(self.min_duration, self.max_duration + 1)
+            start_dur = 0
+            duration = np.random.randint(self.png_min_duration, self.png_max_duration + 1)
         elif isinstance(reader, VideoEffectReader):
             min_size, max_size = self.mov_min_size, self.mov_max_size
             idx = np.random.randint(len(reader.loaded))
             total_frames = reader.total_frames[idx]
-            duration = np.random.randint(min(self.min_duration, total_frames) - 1, total_frames)
+            start_dur = np.random.randint(0, max(1, total_frames - self.mov_min_duration))
+            duration = np.random.randint(min(self.mov_min_duration + start_dur, total_frames) - 1,
+                                         min(total_frames, self.mov_max_duration + start_dur))
         size = np.random.randint(min_size, max_size + 1)
         angle = np.float32(np.random.uniform(-self.max_angle, self.max_angle))
         # Make offset such that at least `min_size` of object is still visible.
@@ -115,7 +120,7 @@ class Augmentations:
         self.last_object_id += 1
         self.objects.append(Effect(reader_id, idx, self.last_object_id,
                                    size, offset, angle, is_flip, transparency,
-                                   gain, bias, gamma, duration, 0))
+                                   gain, bias, gamma, duration, start_dur))
 
     def merge_images(self, img1, img2, offset=None):
         offset = offset if offset is not None else (0, 0)
@@ -218,9 +223,12 @@ class Augmentations:
             # Move bboxes to offset position
             if segments is not None:
                 h, w = frame.shape[:2]
-                for poly in segments:
+                for si, poly in enumerate(segments):
                     poly += offset
                     poly = poly.astype(np.int32)
+                    poly[:, :, 0] = np.clip(poly[:, :, 0], 0, w - 1)
+                    poly[:, :, 1] = np.clip(poly[:, :, 1], 0, h - 1)
+                    segments[si] = poly
                     if self.debug_level > 0:
                         cv2.drawContours(debug_frame, poly, -1, (0, 0, 255), 3)
                 for poly, cat in zip(segments, e_cats):
@@ -233,7 +241,7 @@ class Augmentations:
                     if writer is not None:
                         cat_id = writer.get_cat_id(cat)
                         writer.add_annotation(frame_num, bbox, e_info.track_id,
-                                              cat_id, segmentation=poly)
+                                              cat_id)
                         if self.debug_level > 1:
                             self.put_text(debug_frame, cat, tuple(bbox[:2]))
 

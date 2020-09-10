@@ -38,8 +38,11 @@ min_transparency: 80
 max_transparency: 100
 
 # Duration limits for `png` effects
-min_duration: 1
-max_duration: 1
+png_min_duration: 1
+png_max_duration: 1
+
+mov_min_duration: 1
+mov_max_duration: 5
 
 # Number of objects in the frame
 min_n_objects: 1

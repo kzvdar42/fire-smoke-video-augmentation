@@ -76,7 +76,7 @@ def process_video(in_video_path, augmentations, out_path,
             if show_debug and draw_debug(debug_frame):
                 break
     except KeyboardInterrupt:
-        print('Exited.')
+        tqdm.write('Exited.')
     finally:
         # Close streams.
         in_stream.release()
@@ -146,7 +146,7 @@ def process_images(image_paths, augmentations, out_path,
             if show_debug and draw_debug(debug_image):
                 break
     except KeyboardInterrupt:
-        print('Exited.')
+        tqdm.write('Exited.')
     finally:
         # Close streams.
         pbar.close()
