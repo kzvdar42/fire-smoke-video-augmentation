@@ -353,7 +353,7 @@ def rotate_poly(poly, angle, cx, cy, h, w):
     shape = poly.shape
     poly = poly.reshape(-1, 2)
     poly = np.hstack(
-        (poly, np.ones((poly.shape[0], 1), dtype=poly[0][0].dtype)))
+        (poly, np.ones((poly.shape[0], 1), dtype=poly[0].dtype)))
 
     M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
 

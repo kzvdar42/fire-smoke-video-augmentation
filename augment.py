@@ -144,7 +144,7 @@ class Augmentations:
 
     def get_image(self, e_info, read_annot=True):
         e_image, segments, e_cats = self.e_readers[e_info.reader_id].get_frame(e_info, read_annot=read_annot)
-        segments = np.array([np.array(segment, dtype=np.float32) for segment in segments]) if segments else None
+        segments = np.array([np.array(segment, dtype=np.float32) for segment in segments], dtype=object) if segments else None
         return e_image, segments, e_cats
     
     def transform_effect(self, e_image, e_info, segments):
@@ -225,14 +225,13 @@ class Augmentations:
                 h, w = frame.shape[:2]
                 for si, poly in enumerate(segments):
                     poly += offset
-                    poly = poly.astype(np.int32)
                     poly[:, :, 0] = np.clip(poly[:, :, 0], 0, w - 1)
                     poly[:, :, 1] = np.clip(poly[:, :, 1], 0, h - 1)
                     segments[si] = poly
                     if self.debug_level > 0:
                         cv2.drawContours(debug_frame, poly, -1, (0, 0, 255), 3)
                 for poly, cat in zip(segments, e_cats):
-                    bbox = cv2.boundingRect(poly)
+                    bbox = cv2.boundingRect(poly.astype(np.int32))
                     # Show annotations
                     if self.debug_level > 0:
                         b = convert_xywh_xyxy(bbox, w, h)
