@@ -196,6 +196,12 @@ class Augmentations:
             
             e_image, segments = self.transform_effect(e_image, e_info, segments)
 
+            
+            # If image is grayed (night), convert effect to gray.
+            hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            if (hsv_frame[:, :, 1] < 5).all():
+                e_image[:, :, :3] = 0.299 * e_image[:, :, 2:3] + 0.587 * e_image[:, :, 1:2] + 0.114 * e_image[:, :, :1]
+
             # Center offset
             offset = e_info.offset
             offset = (offset[0] - e_image.shape[1] // 2,

@@ -263,7 +263,8 @@ if __name__ == "__main__":
             clean_folder_content(args.out_path)
 
     if args.in_extention in video_exts:
-        out_path = os.path.join(args.out_path, 'out.mp4')
+        out_path = os.path.split(args.out_path)[0]
+        out_path = os.path.join(out_path, 'out.mp4')
         process_video(args.in_path, augmentations, out_path,
                       coco_writer, args.show_debug, args.write_debug)
     elif args.in_extention in image_exts:
