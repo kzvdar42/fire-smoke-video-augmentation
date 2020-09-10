@@ -10,7 +10,7 @@ mov_max_size: 600
 do_flip: True
 flip_chance: 2 # 1 / chance
 
-do_rotate: True
+do_rotate: False
 max_angle: 30
 
 do_brightness: True
@@ -26,16 +26,16 @@ bias_scale: 2.5
 
 # Gamma correction control
 do_gamma: True
-gamma_from: 0.9
-gamma_to: 1.1
+gamma_from: 0.8
+gamma_to: 1.05
 
 # Blur contour of effect
 do_blur: True
-blur_radius: 5
-contour_radius: 5
+blur_radius: 7
+contour_radius: 7
 
-min_transparency: 70
-max_transparency: 70
+min_transparency: 80
+max_transparency: 100
 
 # Duration limits for `png` effects
 min_duration: 1

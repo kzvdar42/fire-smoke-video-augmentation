@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from augment import Augmentations
 from writer import COCO_writer
+from reader import VideoEffectReader, ImageEffectReader
 from bbox_utils import get_scale_ratio, resize_by_max_side, ImagesReader
 
 
@@ -26,6 +27,12 @@ def _process_image(image, augmentations, writer, image_num, out_ipath, write_deb
         out_img = debug_image if write_debug else image
         threading.Thread(target=cv2.imwrite, args=(out_ipath, out_img)).start()
         return debug_image
+
+
+def draw_debug(debug_frame):
+    debug_frame = cv2.resize(debug_frame, (1280, 720))
+    cv2.imshow('Debug', debug_frame)
+    return cv2.waitKey(1) & 0xFF == ord('q')
 
 
 def process_video(in_video_path, augmentations, out_path,
@@ -127,6 +134,13 @@ def clean_folder_content(path):
         for d in dirs:
             shutil.rmtree(os.path.join(root, d))
 
+def get_default_reader_kwargs():
+    return {
+        'probability': 1,
+        'use_alpha': True,
+        'preload': False,
+    }
+
 
 def get_args():
     parser = argparse.ArgumentParser(description='Video augmentation.')
@@ -139,10 +153,6 @@ def get_args():
                         help='show debug window')
     parser.add_argument('--write_debug', action='store_true',
                         help='write debug info to output')
-    parser.add_argument('--e_png_path', default=None,
-                        help='path for the png effects')
-    parser.add_argument('--e_mov_path', default=None,
-                        help='path for the mov effects')
     parser.add_argument('--write_annotations',
                         action='store_true', help='Write the coco annotations')
     parser.add_argument('--clean_out',
@@ -151,11 +161,36 @@ def get_args():
                         type=int, help='number of threads to use')
     parser.add_argument('--e_config', default=None,
                         help='path to the config file for augmentations')
-    return parser.parse_args()
+    parser.add_argument('--e_paths', default=None, nargs='+',
+                        help='path for the effects')
+    parser.add_argument('--use_alpha', default=None,
+                        help='use alpha channel. binary in format `0,1,0,1`')
+    parser.add_argument('--preload', default=None,
+                        help='preload image effects. binary in format `0,1,0,1`')
+    parser.add_argument('--probability', default=None,
+                        help='probability of choosing this kind of effects. number in format `1,2,3,4`')
+    args = parser.parse_args()
 
+    args.kwargs = []
+    if args.use_alpha:
+        args.kwargs.append(['use_alpha'] + [bool(int(a)) for a in args.use_alpha.split(',')])
+    if args.preload:
+        args.kwargs.append(['preload'] + [bool(int(a)) for a in args.preload.split(',')])
+    if args.probability:
+        args.kwargs.append(['probability'] + [int(a) for a in args.probability.split(',')])
+    args.kwargs = list(zip(*args.kwargs))
+    return args
 
 if __name__ == "__main__":
     args = get_args()
+    e_video_exts = ['webm']
+    video_exts = ['mp4', 'avi']
+    image_exts = ['jpg', 'png']
+    e_kwargs = [dict() for _ in range(len(args.e_paths))]
+    if args.kwargs:
+        keys = args.kwargs[0]
+        for i, values in enumerate(args.kwargs[1:len(e_kwargs) + 1]):
+            e_kwargs[i] = {k:v for k, v in zip(keys, values)}
 
     print('OpenCV is optimized:', cv2.useOptimized())
     # sys.setcheckinterval
@@ -163,13 +198,26 @@ if __name__ == "__main__":
     coco_writer = get_coco_writer() if args.write_annotations else None
 
     # Get path for effects
-    e_png = glob(os.path.join(args.e_png_path, '*.png')) if args.e_png_path else []
-    e_mov = glob(os.path.join(args.e_mov_path, '*.webm')) if args.e_mov_path else []
+    e_readers = []
+    for path, kwargs in zip(args.e_paths, e_kwargs):
+        files = [os.path.join(path, f) for f in os.listdir(path)]
+        files = [f for f in files if os.path.isfile(f)]
+        image_files, video_files = [], []
+        for file_path in files:
+            ext = os.path.splitext(file_path)[1][1:]
+            if ext in image_exts:
+                image_files.append(file_path)
+            elif ext in e_video_exts:
+                video_files.append(file_path)
+        
+        if len(image_files):
+            e_readers.append(ImageEffectReader(image_files, **kwargs))
+        if len(video_files):
+            e_readers.append(VideoEffectReader(video_files, **kwargs))
 
     # Augmentations
     augment = Augmentations(
-        e_png,
-        e_mov,
+        e_readers,
         config_path=args.e_config,
     )
 
@@ -183,11 +231,11 @@ if __name__ == "__main__":
         if args.clean_out:
             clean_folder_content(args.out_path)
 
-    if args.in_extention in ['mp4', 'avi']:
+    if args.in_extention in video_exts:
         out_path = os.path.join(args.out_path, 'out.mp4')
         process_video(args.in_path, augmentations, out_path,
                       coco_writer, args.show_debug, args.write_debug)
-    elif args.in_extention in ['jpg', 'png']:
+    elif args.in_extention in image_exts:
         image_paths = glob(os.path.join(args.in_path, f'*.{args.in_extention}'))
         image_paths.sort(key=lambda s: int(os.path.splitext(os.path.split(s)[1])[0].split('-')[-1]))
         process_images(image_paths, augmentations, args.out_path, coco_writer,

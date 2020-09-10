@@ -134,6 +134,7 @@ fire-dataset
 source_videos/*
 test8
 effects/*
+!effects/prep_real_fire_smoke_vid
 !effects/prep_fire*
 !effects/prep_smoke*
 ufa

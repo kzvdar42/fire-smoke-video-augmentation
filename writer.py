@@ -2,6 +2,12 @@ import json
 
 import numpy as np
 
+class NumpyEncoder(json.JSONEncoder):
+    """Class to encode the numpy arrays in json."""
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return json.JSONEncoder.default(self, obj)
 
 class COCO_writer:
 
@@ -13,7 +19,7 @@ class COCO_writer:
 
     def get_cat_id(self, cat_name):
         for cat in self.categories:
-            if cat['name'] == cat_name:
+            if cat['name'].lower() == cat_name.lower():
                 return cat['id']
         return ValueError(f'Unknown category ({cat_name})')
 
@@ -31,12 +37,16 @@ class COCO_writer:
             'id': cat_id,
         })
 
-    def add_frame(self, height, width, filename):
+    def add_frame(self, height, width, filename=None, file_ext=None):
+        image_id = len(self.images) + 1
+        if filename is None:
+            file_ext = file_ext if file_ext is not None else 'jpg'
+            filename = f'{image_id:0>7}.{file_ext}'
         self.images.append({
             'height': height,
             'date_captured': None,
             'dataset': 'Roadar',
-            'id': len(self.images) + 1,
+            'id': image_id,
             'file_name': filename,
             'image': filename,
             'flickr_url': None,
@@ -44,15 +54,16 @@ class COCO_writer:
             'width': width,
             'license': None,
         })
+        return image_id, filename
 
-    def add_annotation(self, image_id, bbox, track_id, category_id):
+    def add_annotation(self, image_id, bbox, track_id, category_id, segmentation=None):
         area = int(bbox[1] * bbox[3])
 
         self.annotations.append({
             'image_id': image_id,
-            'segmentation': None,
+            'segmentation': segmentation,
             'iscrowd': 0,
-            'bbox': bbox.astype(int).tolist(),
+            'bbox': bbox,
             'attributes': {},
             'area': area,
             'is_occluded': False,
@@ -69,4 +80,4 @@ class COCO_writer:
         result['licenses'] = None
         result['info'] = None
         with open(save_path, 'w') as out_file:
-            json.dump(result, out_file)
+            json.dump(result, out_file, cls=NumpyEncoder)
