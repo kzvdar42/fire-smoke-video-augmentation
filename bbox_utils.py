@@ -132,26 +132,18 @@ def rotate(image, angle, bboxes=None, segments=None):
         M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
         enclosing_polygons = []
         for segment in segments:
-            enclosing_polygons.append(cv2.transform(segment, M))
-        enclosing_polygons = np.array(enclosing_polygons)
-        segments = enclosing_polygons
+            seg = rotate_poly(segment, angle, cx, cy, h, w)
+            seg = seg / (scale_factor_x, scale_factor_y)
+            enclosing_polygons.append(seg)
+        segments = enclosing_polygons = np.array(enclosing_polygons)
     elif bboxes is not None:
         corners = get_corners(bboxes)
         # Rotate corners.
-        enclosing_polygons = rotate_box(corners, angle, cx, cy, h, w)
-    if enclosing_polygons is not None:
+        corners = rotate_box(corners, angle, cx, cy, h, w)
         # Calculate enclosing bbox.
-        # bboxes = get_enclosing_box(enclosing_polygon)
-        bboxes = []
-        for poly in enclosing_polygons:
-            bbox = cv2.boundingRect(poly)
-            bbox = convert_xywh_xyxy(bbox, w, h)
-            bboxes.append(bbox)
-        bboxes = np.array(bboxes, dtype=np.float32)
+        bboxes = get_enclosing_box(corners)
         # Scale back.
-        # bboxes[:, :4] /= [scale_factor_x, scale_factor_y] * 2
-
-    # new_bboxes = clip_box(new_bboxes, [0, 0, w, h], 0.25)
+        bboxes[:, :4] /= [scale_factor_x, scale_factor_y] * 2
     return image, bboxes, segments
 
 
@@ -335,7 +327,6 @@ def rotate_box(corners, angle,  cx, cy, h, w):
         Numpy array of shape `N x 8` containing N rotated bounding boxes each described by their 
         corner co-ordinates `x1 y1 x2 y2 x3 y3 x4 y4`
     """
-    size = corners.shape[1]
     corners = corners.reshape(-1, 2)
     corners = np.hstack(
         (corners, np.ones((corners.shape[0], 1), dtype=type(corners[0][0]))))
@@ -353,9 +344,30 @@ def rotate_box(corners, angle,  cx, cy, h, w):
     # Prepare the vector to be transformed
     calculated = np.dot(M, corners.T).T
 
-    calculated = calculated.reshape(-1, size)
+    calculated = calculated.reshape(-1, 8)
 
     return calculated
+
+def rotate_poly(poly, angle, cx, cy, h, w):
+    """Rotate the polygon."""
+    shape = poly.shape
+    poly = poly.reshape(-1, 2)
+    poly = np.hstack(
+        (poly, np.ones((poly.shape[0], 1), dtype=poly[0][0].dtype)))
+
+    M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+
+    cos = np.abs(M[0, 0])
+    sin = np.abs(M[0, 1])
+
+    nW = int((h * sin) + (w * cos))
+    nH = int((h * cos) + (w * sin))
+    # adjust the rotation matrix to take into account translation
+    M[0, 2] += (nW / 2) - cx
+    M[1, 2] += (nH / 2) - cy
+    # Prepare the vector to be transformed
+    calculated = np.dot(M, poly.T).T
+    return calculated.reshape(*shape)
 
 
 def get_enclosing_box(corners):

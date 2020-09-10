@@ -10,7 +10,7 @@ mov_max_size: 600
 do_flip: True
 flip_chance: 2 # 1 / chance
 
-do_rotate: False
+do_rotate: True
 max_angle: 30
 
 do_brightness: True
