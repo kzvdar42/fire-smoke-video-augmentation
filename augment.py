@@ -196,17 +196,6 @@ class Augmentations:
             
             e_image, segments = self.transform_effect(e_image, e_info, segments)
 
-            # Create bboxes from segments
-            bboxes = None
-            if segments is not None:
-                h, w = e_image.shape[:2]
-                bboxes = []
-                for poly in segments:
-                    bbox = cv2.boundingRect(poly)
-                    bbox = convert_xywh_xyxy(bbox, w, h)
-                    bboxes.append(bbox)
-                bboxes = np.array(bboxes, dtype=np.float32)
-
             # Center offset
             offset = e_info.offset
             offset = (offset[0] - e_image.shape[1] // 2,
@@ -218,26 +207,27 @@ class Augmentations:
             # Write debug info to independent image
             if self.debug_level > 0:
                 debug_frame = frame.copy()
-
+            
+            # Create bboxes from segments
             # Move bboxes to offset position
             if segments is not None:
+                h, w = frame.shape[:2]
                 for poly in segments:
                     poly += offset
                     poly = poly.astype(np.int32)
                     if self.debug_level > 0:
                         cv2.drawContours(debug_frame, poly, -1, (0, 0, 255), 3)
-            if bboxes is not None:
-                bboxes += np.hstack((offset, offset))
-                bboxes = bboxes.astype(np.int32)
-                for bbox, cat in zip(bboxes, e_cats):
+                for poly, cat in zip(segments, e_cats):
+                    bbox = cv2.boundingRect(poly)
                     # Show annotations
                     if self.debug_level > 0:
-                        cv2.rectangle(debug_frame, tuple(bbox[:2]), tuple(bbox[2:4]), (0, 0, 255), 3)
+                        b = convert_xywh_xyxy(bbox, w, h)
+                        cv2.rectangle(debug_frame, tuple(b[:2]), tuple(b[2:4]), (0, 0, 255), 3)
                     # Write annotations
                     if writer is not None:
-                        bbox = convert_xyxy_xywh(bbox)
                         cat_id = writer.get_cat_id(cat)
-                        writer.add_annotation(frame_num, bbox, e_info.track_id, cat_id)
+                        writer.add_annotation(frame_num, bbox, e_info.track_id,
+                                              cat_id, segmentation=poly)
                         if self.debug_level > 1:
                             self.put_text(debug_frame, cat, tuple(bbox[:2]))
 

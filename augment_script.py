@@ -16,6 +16,15 @@ from reader import VideoEffectReader, ImageEffectReader
 from bbox_utils import get_scale_ratio, resize_by_max_side, ImagesReader
 
 
+def get_int_from_str(s):
+  # Extract only digit characters
+  s = ''.join([ch for ch in s if ch.isdigit()])
+  return int(s if len(s) else '0')
+
+def sort_by_digits_in_name(path):
+  return get_int_from_str(os.path.splitext(os.path.split(path)[1])[0])
+
+
 def process_image(frame, augmentations, writer=None, frame_num=None):
     for augment in augmentations:
         frame, debug_frame = augment.augment(frame, writer, frame_num)
@@ -49,7 +58,7 @@ def process_video(in_video_path, augmentations, out_path,
                                  (frame_width, frame_height))
 
     pbar = tqdm(total=total_frames)
-    frame_num = 0
+    frame_num = None
     try:
         while in_stream.isOpened():
             _, frame = in_stream.read()
@@ -58,8 +67,7 @@ def process_video(in_video_path, augmentations, out_path,
                 break
 
             if writer:
-                image_name = f'image_{frame_num:06d}.jpg'
-                writer.add_frame(*frame.shape[:2], image_name)
+                frame_num, _ = writer.add_frame(*frame.shape[:2])
             frame, debug_frame = process_image(frame, augmentations, writer, frame_num)
             out_stream.write(debug_frame if write_debug else frame)
             pbar.update(1)
@@ -80,16 +88,35 @@ def process_video(in_video_path, augmentations, out_path,
 def get_coco_writer():
     return COCO_writer([
         {
-            'name': 'Fire',
+            'name': 'person',
+            'supercategory': '',
+            'id': 0,
+        },
+        {
+            'name': 'vehicle',
+            'supercategory': '',
+            'id': 1,
+        },
+        {
+            'name': 'fire',
             'supercategory': '',
             'id': 2,
         },
         {
-            'name': 'Smoke',
+            'name': 'animal',
+            'supercategory': '',
+            'id': 3,
+        },
+        {
+            'name': 'smoke',
             'supercategory': '',
             'id': 4,
         },
-    ])
+    ],
+    synonyms={
+        'vehicle': ['Car']
+    }
+    )
 
 
 def process_images(image_paths, augmentations, out_path,
@@ -98,12 +125,13 @@ def process_images(image_paths, augmentations, out_path,
     image_reader = ImagesReader(image_paths, buffer_size=buffer_size)
     pbar = tqdm(total=len(image_paths))
     # threads = []
+    image_num = None
     try:
-        for image_num, (image_path, image) in enumerate(image_reader):
+        for image_path, image in image_reader:
             image_name = os.path.split(image_path)[1]
             out_ipath = os.path.join(out_path, image_name)
             if writer:
-                writer.add_frame(*image.shape[:2], image_name)
+                image_num, _ = writer.add_frame(*image.shape[:2], image_name)
             args = (image, augmentations, writer,
                     image_num, out_ipath, write_debug)
             debug_image = _process_image(*args)
@@ -115,11 +143,8 @@ def process_images(image_paths, augmentations, out_path,
             # threads.append(thread)
             pbar.update(1)
 
-            if show_debug:
-                debug_frame = cv2.resize(debug_frame, (1280, 720))
-                cv2.imshow('Debug', debug_frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
+            if show_debug and draw_debug(debug_image):
+                break
     except KeyboardInterrupt:
         print('Exited.')
     finally:
@@ -172,6 +197,7 @@ def get_args():
     args = parser.parse_args()
 
     args.kwargs = []
+    args.out_path = os.path.join(args.out_path, 'images')
     if args.use_alpha:
         args.kwargs.append(['use_alpha'] + [bool(int(a)) for a in args.use_alpha.split(',')])
     if args.preload:
@@ -194,8 +220,13 @@ if __name__ == "__main__":
 
     print('OpenCV is optimized:', cv2.useOptimized())
     # sys.setcheckinterval
-
-    coco_writer = get_coco_writer() if args.write_annotations else None
+    if args.write_annotations:
+        annot_out_path = os.path.join(os.path.split(args.out_path)[0], 'annotations', 'instances_default.json')
+        print(f'Writing annotations to {annot_out_path}')
+        coco_writer = get_coco_writer()
+    else:
+        print('Not writing annotaions!')
+        coco_writer = None
 
     # Get path for effects
     e_readers = []
@@ -237,7 +268,7 @@ if __name__ == "__main__":
                       coco_writer, args.show_debug, args.write_debug)
     elif args.in_extention in image_exts:
         image_paths = glob(os.path.join(args.in_path, f'*.{args.in_extention}'))
-        image_paths.sort(key=lambda s: int(os.path.splitext(os.path.split(s)[1])[0].split('-')[-1]))
+        image_paths.sort(key=sort_by_digits_in_name)
         process_images(image_paths, augmentations, args.out_path, coco_writer,
                        args.show_debug, args.write_debug, args.n_workers)
     else:
@@ -245,6 +276,5 @@ if __name__ == "__main__":
 
     # Write annotations.
     if args.write_annotations:
-        annot_out_path = os.path.join(os.path.split(args.out_path)[0], 'annotations', 'instances_default.json')
         os.makedirs(os.path.split(annot_out_path)[0], exist_ok=True)
         coco_writer.write_result(annot_out_path)

@@ -11,17 +11,26 @@ class NumpyEncoder(json.JSONEncoder):
 
 class COCO_writer:
 
-    def __init__(self, categories=None):
+    def __init__(self, categories=None, synonyms=None):
         categories = [] if categories is None else categories
         self.categories = categories
         self.annotations = []
         self.images = []
+        self.cat_to_id = dict()
+        for cat in self.categories:
+            cat_id = cat['id']
+            self.cat_to_id[cat['name'].lower()] = cat_id
+            # Add synonyms
+            if synonyms is not None:
+                for s in synonyms.get(cat['name'], []):
+                    self.cat_to_id[s.lower()] = cat_id
 
     def get_cat_id(self, cat_name):
-        for cat in self.categories:
-            if cat['name'].lower() == cat_name.lower():
-                return cat['id']
-        return ValueError(f'Unknown category ({cat_name})')
+        cat_id = self.cat_to_id.get(cat_name.lower(), None)
+        if cat_id is None:
+            raise ValueError(f'Unknown category ({cat_name})')
+        else:
+            return cat_id
 
     def add_category(name, supercategory, cat_id=None):
         existing_ids = [x['id'] for x in self.categories]

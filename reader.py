@@ -13,9 +13,15 @@ def get_segments_and_cats_from_obj(obj, cats):
         bbox = convert_xywh_xyxy(obj['bbox'], width, height)
         segment = get_corners(np.array(bbox)).reshape(-1, 1, 2)
     else:
-        segment = np.array(obj['segmentation'][0], dtype=np.float32).reshape(-1, 1, 2)
+        segments = []
+        for segment in obj['segmentation']:
+            segment = np.array(segment, dtype=np.int32).reshape(-1, 1, 2)
+            segment = cv2.approxPolyDP(segment, 3, True)
+            # XXX: Collecting all polygons into one. If you want to use them afterwards, change
+            segments.extend(segment)
+        segments = np.array(segments)
     cat = cats[obj['category_id']]['name']
-    return segment, cat
+    return segments, cat
 
 
 @dataclass(init=False)
