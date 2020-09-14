@@ -280,4 +280,6 @@ class ThreadedImagesReader:
             n_tries += 1
             if n_tries % 50 == 0:
                 self.threads.join_threads()
+                if self.__is_open():
+                    self.start_new_thread()
         raise StopIteration
