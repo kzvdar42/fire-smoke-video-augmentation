@@ -56,7 +56,7 @@ class Augmentations:
     blur_radius: int = 5
     contour_radius: int = 5
 
-    min_transparency: int = 50
+    min_transparency: int = 80
     max_transparency: int = 100
 
     png_min_duration: int = 30
@@ -229,7 +229,7 @@ class Augmentations:
                     poly[:, :, 1] = np.clip(poly[:, :, 1], 0, h - 1)
                     segments[si] = poly
                     if self.debug_level > 0:
-                        cv2.drawContours(debug_frame, poly, -1, (0, 0, 255), 3)
+                        cv2.drawContours(debug_frame, poly.astype(np.int32), -1, (0, 0, 255), 3)
                 for poly, cat in zip(segments, e_cats):
                     bbox = cv2.boundingRect(poly.astype(np.int32))
                     # Show annotations

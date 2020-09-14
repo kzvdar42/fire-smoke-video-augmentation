@@ -5,6 +5,7 @@ import numpy as np
 import json
 import argparse
 import threading
+import traceback
 from dataclasses import dataclass
 
 import cv2
@@ -12,8 +13,8 @@ from tqdm import tqdm
 
 from augment import Augmentations
 from writer import COCO_writer
-from reader import VideoEffectReader, ImageEffectReader
-from bbox_utils import get_scale_ratio, resize_by_max_side, ImagesReader
+from reader import VideoEffectReader, ImageEffectReader, ThreadsHandler, ThreadedImagesReader
+from bbox_utils import get_scale_ratio, resize_by_max_side
 
 
 def get_int_from_str(s):
@@ -31,11 +32,18 @@ def process_image(frame, augmentations, writer=None, frame_num=None):
     return frame, debug_frame if debug_frame is not None else frame
 
 
-def _process_image(image, augmentations, writer, image_num, out_ipath, write_debug):
+def write_image_and_test_out(path, image):
+    cv2.imwrite(path, image)
+    if not (os.path.isfile(path) and os.path.getsize(path)) > 0:
+        print(f"[ERROR] Failed to save augmented image to {path}")
+
+
+def process_and_write_image(image, augmentations, writer, image_num, out_ipath, write_debug):
         image, debug_image = process_image(image, augmentations, writer, image_num)
         out_img = debug_image if write_debug else image
-        threading.Thread(target=cv2.imwrite, args=(out_ipath, out_img)).start()
-        return debug_image
+        thread = threading.Thread(target=write_image_and_test_out, args=(out_ipath, out_img))
+        thread.start()
+        return debug_image, thread
 
 
 def draw_debug(debug_frame):
@@ -47,6 +55,7 @@ def draw_debug(debug_frame):
 def process_video(in_video_path, augmentations, out_path,
                   writer=None, show_debug=False, write_debug=False):
     in_stream = cv2.VideoCapture(in_video_path)
+    is_exit = False
 
     # Create writer
     frame_width = int(in_stream.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -54,35 +63,46 @@ def process_video(in_video_path, augmentations, out_path,
     frame_rate = int(in_stream.get(cv2.CAP_PROP_FPS))
     total_frames = int(in_stream.get(cv2.CAP_PROP_FRAME_COUNT))
     fourcc = cv2.VideoWriter_fourcc(*'MPEG')
-    out_stream = cv2.VideoWriter(out_path, fourcc, frame_rate,
-                                 (frame_width, frame_height))
 
-    pbar = tqdm(total=total_frames)
-    frame_num = None
+    pbar = tqdm(total=total_frames, desc=f'Processing {in_video_path}')
+    image_num = None
+    frame_num = 0
+    write_threads = ThreadsHandler()
     try:
         while in_stream.isOpened():
-            _, frame = in_stream.read()
-            if frame is None:
-                print("No image in the stream, stopping.")
+            _, image = in_stream.read()
+            if image is None:
+                tqdm.write("No image in the stream, stopping.")
                 break
 
             if writer:
-                frame_num, _ = writer.add_frame(*frame.shape[:2])
-            frame, debug_frame = process_image(frame, augmentations, writer, frame_num)
-            out_stream.write(debug_frame if write_debug else frame)
+                image_num, image_name = writer.add_frame(*image.shape[:2])
+            else:
+                frame_num += 1
+                image_name = f'{frame_num:0>7}.jpg'
+            out_ipath = os.path.join(out_path, image_name)
+            debug_image, thread = process_and_write_image(
+                image, augmentations, writer,
+                image_num, out_ipath, write_debug
+            )
+            write_threads.append(thread)
             pbar.update(1)
-            frame_num += 1
 
             if show_debug and draw_debug(debug_frame):
                 break
     except KeyboardInterrupt:
         tqdm.write('Exited.')
+        is_exit = True
     finally:
         # Close streams.
-        in_stream.release()
-        out_stream.release()
         pbar.close()
+        tqdm.write('Closing in_stream')
+        in_stream.release()
+        tqdm.write('Closed')
+        tqdm.write('Closing out streams')
+        write_threads.join_threads()
         cv2.destroyAllWindows()
+        return is_exit
 
 
 def get_coco_writer():
@@ -122,35 +142,38 @@ def get_coco_writer():
 def process_images(image_paths, augmentations, out_path,
                    writer=None, show_debug=False, write_debug=False, n_workers=None):
     buffer_size = 32
-    image_reader = ImagesReader(image_paths, buffer_size=buffer_size)
+    is_exit = False
+    image_reader = ThreadedImagesReader(image_paths, buffer_size=buffer_size)
     pbar = tqdm(total=len(image_paths))
-    # threads = []
     image_num = None
+    write_threads = ThreadsHandler()
     try:
         for image_path, image in image_reader:
             image_name = os.path.split(image_path)[1]
             out_ipath = os.path.join(out_path, image_name)
             if writer:
-                image_num, _ = writer.add_frame(*image.shape[:2], image_name)
-            args = (image, augmentations, writer,
-                    image_num, out_ipath, write_debug)
-            debug_image = _process_image(*args)
-            # while len(threads) > n_workers:
-            #     threads[0].join()
-            #     threads = [thread for thread in threads if thread.is_alive()]
-            # thread = threading.Thread(target=_process_image, args=args)
-            # thread.start()
-            # threads.append(thread)
+                image_num, _ = writer.add_frame(*image.shape[:2], out_ipath)
+            debug_image, thread = process_and_write_image(
+                image, augmentations, writer,
+                image_num, out_ipath, write_debug
+            )
+            write_threads.append(thread)
             pbar.update(1)
 
             if show_debug and draw_debug(debug_image):
                 break
     except KeyboardInterrupt:
         tqdm.write('Exited.')
+        is_exit = True
+    except Exception:
+        tqdm.write('Error!')
+        traceback.print_exc()
     finally:
         # Close streams.
         pbar.close()
+        write_threads.join_threads()
         cv2.destroyAllWindows()
+        return is_exit
 
 def clean_folder_content(path):
     for root, dirs, files in os.walk(path):
@@ -192,12 +215,13 @@ def get_args():
                         help='use alpha channel. binary in format `0,1,0,1`')
     parser.add_argument('--preload', default=None,
                         help='preload image effects. binary in format `0,1,0,1`')
+    parser.add_argument('--skip_annotated', action='store_true',
+                        help='skip annotated files')
     parser.add_argument('--probability', default=None,
                         help='probability of choosing this kind of effects. number in format `1,2,3,4`')
     args = parser.parse_args()
 
     args.kwargs = []
-    args.out_path = os.path.join(args.out_path, 'images')
     if args.use_alpha:
         args.kwargs.append(['use_alpha'] + [bool(int(a)) for a in args.use_alpha.split(',')])
     if args.preload:
@@ -207,8 +231,28 @@ def get_args():
     args.kwargs = list(zip(*args.kwargs))
     return args
 
+def create_folder(path, clean_out):
+    try:
+        os.makedirs(path)
+    except OSError:
+        if clean_out:
+            clean_folder_content(path)
+
+
+def get_subfolders_with_files(path, file_ext):
+    for dp, dn, fn in os.walk(path):
+        file_paths = [os.path.join(dp, f) for f in fn if f.endswith(file_ext)]
+        if len(file_paths):
+            if file_ext in video_exts:
+                for file_path in file_paths:
+                    yield [file_path]
+            else:
+                yield file_paths
+
+
 if __name__ == "__main__":
     args = get_args()
+    coco_writer = None
     e_video_exts = ['webm']
     video_exts = ['mp4', 'avi']
     image_exts = ['jpg', 'png']
@@ -219,14 +263,8 @@ if __name__ == "__main__":
             e_kwargs[i] = {k:v for k, v in zip(keys, values)}
 
     print('OpenCV is optimized:', cv2.useOptimized())
-    # sys.setcheckinterval
-    if args.write_annotations:
-        annot_out_path = os.path.join(os.path.split(args.out_path)[0], 'annotations', 'instances_default.json')
-        print(f'Writing annotations to {annot_out_path}')
-        coco_writer = get_coco_writer()
-    else:
+    if not args.write_annotations:
         print('Not writing annotaions!')
-        coco_writer = None
 
     # Get path for effects
     e_readers = []
@@ -255,27 +293,46 @@ if __name__ == "__main__":
     augmentations = [
         augment
     ]
-    
-    try:
-        os.makedirs(args.out_path)
-    except OSError:
-        if args.clean_out:
-            clean_folder_content(args.out_path)
-
-    if args.in_extention in video_exts:
-        out_path = os.path.split(args.out_path)[0]
-        out_path = os.path.join(out_path, 'out.mp4')
-        process_video(args.in_path, augmentations, out_path,
-                      coco_writer, args.show_debug, args.write_debug)
-    elif args.in_extention in image_exts:
-        image_paths = glob(os.path.join(args.in_path, f'*.{args.in_extention}'))
-        image_paths.sort(key=sort_by_digits_in_name)
-        process_images(image_paths, augmentations, args.out_path, coco_writer,
-                       args.show_debug, args.write_debug, args.n_workers)
-    else:
-        raise ValueError(f'Unsupported extention! ({args.in_extention})')
-
-    # Write annotations.
-    if args.write_annotations:
-        os.makedirs(os.path.split(annot_out_path)[0], exist_ok=True)
-        coco_writer.write_result(annot_out_path)
+    subfolders = list(get_subfolders_with_files(args.in_path, args.in_extention))
+    if len(subfolders) == 0:
+        print(f'No files with ext `.{args.in_extention}` found!')
+        exit(0)
+    fold_pbar = tqdm(subfolders)
+    for file_paths in fold_pbar:
+        file_paths.sort(key=sort_by_digits_in_name)
+        folder_path = os.path.relpath(os.path.split(file_paths[0])[0], args.in_path)
+        fold_pbar.set_description(f'Processing {folder_path}')
+        if os.path.split(folder_path)[1] == 'images':
+            folder_path = os.path.split(folder_path)[0]
+        first_file_name = os.path.split(file_paths[0])[1]
+        out_path = os.path.join(args.out_path, folder_path)
+        if args.in_extention in video_exts:
+            out_path = os.path.join(out_path, first_file_name)
+        annot_out_path = os.path.join(out_path, 'annotations', 'instances_default.json')
+        # Skip already annotated
+        if args.skip_annotated and os.path.isfile(annot_out_path):
+            tqdm.write(f"Skipping {annot_out_path} as it's already annotated")
+            continue
+        if args.write_annotations:
+            coco_writer = get_coco_writer()
+        create_folder(out_path, args.clean_out)
+        if args.in_extention in video_exts:
+            assert len(file_paths) == 1, "Input for video is one file_path!"
+            file_paths = file_paths[0]
+            process_fn = process_video
+        elif args.in_extention in image_exts:
+            process_fn = process_images
+        else:
+            raise ValueError(f'Unsupported extention! ({args.in_extention})')
+        data_out_path = os.path.join(out_path, 'images')
+        create_folder(data_out_path, args.clean_out)
+        is_exit = process_fn(file_paths, augmentations, data_out_path,
+                             coco_writer, args.show_debug, args.write_debug)
+        # Write annotations
+        if args.write_annotations:
+            create_folder(os.path.split(annot_out_path)[0], args.clean_out)
+            tqdm.write(f'Writing annotations to {annot_out_path}')
+            coco_writer.write_result(annot_out_path)
+        if is_exit:
+            break
+    fold_pbar.close()

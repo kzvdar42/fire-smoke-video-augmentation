@@ -1,81 +1,6 @@
 # Part of the code is from https://github.com/Paperspace/DataAugmentationForObjectDetection.
 import cv2
 import numpy as np
-from threading import Thread, Lock
-from itertools import cycle
-
-
-def synchronized(func):
-    """Decorator for the syncronized usage of the function."""
-    func.__lock__ = Lock()
-
-    def synced_func(*args, **kws):
-        with func.__lock__:
-            return func(*args, **kws)
-
-    return synced_func
-
-
-class ImagesReader:
-    def __init__(self, images, buffer_size=32):
-        self.images = images
-        self.total = len(images)
-        self.buffer_size = buffer_size
-        self.next_id = 0
-        self.buffer = []
-        self.threads = []
-        self._fill_buffer()
-
-    def is_open(self):
-        return self.__is_open() or len(self.buffer)
-
-    def __is_open(self):
-        return self.next_id < self.total
-
-    @synchronized
-    def __get_next_id(self):
-        old_next_id = self.next_id
-        self.next_id += 1
-        return old_next_id
-
-    def __read_to_buffer(self):
-        image_path = self.images[self.__get_next_id()]
-        self.buffer.append((image_path, cv2.imread(image_path)))
-
-    def start_new_thread(self):
-        thread = Thread(target=self.__read_to_buffer, name=str(self.next_id))
-        thread.start()
-        self.threads.append(thread)
-
-    @synchronized
-    def clean_threads(self):
-        threads, self.threads = self.threads, []
-        threads = [thread for thread in threads if not thread.is_alive()]
-        self.threads.extend(threads)
-
-    @synchronized
-    def join_threads(self):
-        threads, self.threads = self.threads, []
-        for thread in threads:
-            thread.join()
-
-    @synchronized
-    def _fill_buffer(self):
-        if self.__is_open():
-            for _ in range(self.buffer_size - len(self.buffer)):
-                self.start_new_thread()
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        if not self.is_open():
-            raise StopIteration
-        while self.is_open():
-            if len(self.buffer):
-                if self.__is_open():
-                    self.start_new_thread()
-                return self.buffer.pop(0)
 
 
 def prepare_image(image):
@@ -119,7 +44,8 @@ def rotate(image, angle, bboxes=None, segments=None):
     cx, cy = w // 2, h // 2
 
     # Rotate image.
-    image = rotate_im(image, angle)
+    M, (nW, nH) = get_rotation_matrix(angle, cx, cy, h, w)
+    image = cv2.warpAffine(image, M, (nW, nH))
 
     # Scale back
     scale_factor_x = image.shape[1] / w
@@ -129,17 +55,16 @@ def rotate(image, angle, bboxes=None, segments=None):
 
     enclosing_polygons = None
     if segments is not None:
-        M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
         enclosing_polygons = []
         for segment in segments:
-            seg = rotate_poly(segment, angle, cx, cy, h, w)
+            seg = rotate_poly(segment, M)
             seg = seg / (scale_factor_x, scale_factor_y)
             enclosing_polygons.append(seg)
         segments = enclosing_polygons = np.array(enclosing_polygons)
     elif bboxes is not None:
         corners = get_corners(bboxes)
         # Rotate corners.
-        corners = rotate_box(corners, angle, cx, cy, h, w)
+        corners = rotate_box(corners, M)
         # Calculate enclosing bbox.
         bboxes = get_enclosing_box(corners)
         # Scale back.
@@ -207,39 +132,14 @@ def convert_xyxy_xywh(bbox):
     bbox[3] = bbox[3] - bbox[1]
     return bbox
 
-
-def rotate_im(image, angle):
-    """Rotate the image.
-
-    Rotate the image such that the rotated image is enclosed inside the tightest
-    rectangle. The area not occupied by the pixels of the original image is colored
-    black. 
-
-    Parameters
-    ----------
-
-    image : numpy.ndarray
-        numpy image
-
-    angle : float
-        angle by which the image is to be rotated
-
-    Returns
-    -------
-
-    numpy.ndarray
-        Rotated Image
-
-    """
+def get_rotation_matrix(angle, cx, cy, h, w):
     # grab the dimensions of the image and then determine the
     # centre
-    (h, w) = image.shape[:2]
-    (cX, cY) = (w // 2, h // 2)
 
     # grab the rotation matrix (applying the negative of the
     # angle to rotate clockwise), then grab the sine and cosine
     # (i.e., the rotation components of the matrix)
-    M = cv2.getRotationMatrix2D((cX, cY), angle, 1.0)
+    M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
     cos = np.abs(M[0, 0])
     sin = np.abs(M[0, 1])
 
@@ -248,11 +148,9 @@ def rotate_im(image, angle):
     nH = int((h * cos) + (w * sin))
 
     # adjust the rotation matrix to take into account translation
-    M[0, 2] += (nW / 2) - cX
-    M[1, 2] += (nH / 2) - cY
-
-    # perform the actual rotation and return the image
-    return cv2.warpAffine(image, M, (nW, nH))
+    M[0, 2] += (nW / 2) - cx
+    M[1, 2] += (nH / 2) - cy
+    return M, (nW, nH)
 
 
 def get_corners(bboxes):
@@ -294,7 +192,7 @@ def get_corners(bboxes):
     return corners
 
 
-def rotate_box(corners, angle,  cx, cy, h, w):
+def rotate_box(corners, M):
     """Rotate the bounding box.
 
 
@@ -328,44 +226,15 @@ def rotate_box(corners, angle,  cx, cy, h, w):
         corner co-ordinates `x1 y1 x2 y2 x3 y3 x4 y4`
     """
     corners = corners.reshape(-1, 2)
-    corners = np.hstack(
-        (corners, np.ones((corners.shape[0], 1), dtype=type(corners[0][0]))))
-
-    M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
-
-    cos = np.abs(M[0, 0])
-    sin = np.abs(M[0, 1])
-
-    nW = int((h * sin) + (w * cos))
-    nH = int((h * cos) + (w * sin))
-    # adjust the rotation matrix to take into account translation
-    M[0, 2] += (nW / 2) - cx
-    M[1, 2] += (nH / 2) - cy
-    # Prepare the vector to be transformed
+    corners = np.hstack((corners, np.ones((corners.shape[0], 1), dtype=type(corners[0][0]))))
     calculated = np.dot(M, corners.T).T
+    return calculated.reshape(-1, 8)
 
-    calculated = calculated.reshape(-1, 8)
-
-    return calculated
-
-def rotate_poly(poly, angle, cx, cy, h, w):
+def rotate_poly(poly, M):
     """Rotate the polygon."""
     shape = poly.shape
     poly = poly.reshape(-1, 2)
-    poly = np.hstack(
-        (poly, np.ones((poly.shape[0], 1), dtype=poly[0].dtype)))
-
-    M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
-
-    cos = np.abs(M[0, 0])
-    sin = np.abs(M[0, 1])
-
-    nW = int((h * sin) + (w * cos))
-    nH = int((h * cos) + (w * sin))
-    # adjust the rotation matrix to take into account translation
-    M[0, 2] += (nW / 2) - cx
-    M[1, 2] += (nH / 2) - cy
-    # Prepare the vector to be transformed
+    poly = np.hstack((poly, np.ones((poly.shape[0], 1), dtype=poly[0].dtype)))
     calculated = np.dot(M, poly.T).T
     return calculated.reshape(*shape)
 

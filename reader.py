@@ -1,6 +1,7 @@
 from collections import defaultdict
 from dataclasses import dataclass
 import os
+from threading import Thread, Lock
 
 import cv2
 import numpy as np
@@ -182,3 +183,101 @@ class ImageEffectReader:
                     segments.append(segment)
                     e_cats.append(cat)
         return e_image, segments, e_cats
+
+
+class ThreadsHandler:
+
+    def __init__(self):
+        self.threads = []
+        self._lock = Lock()
+    
+    def add(self, target, args=None, name=None):
+        thread = Thread(target=target, args=args, name=name)
+        thread.start()
+        self.threads.append(thread)
+    
+    def append(self, thread):
+        self.threads.append(thread)
+
+    def clean_threads(self):
+        with self._lock:
+            threads, self.threads = self.threads, []
+            threads = [thread for thread in threads if not thread.is_alive()]
+            self.threads.extend(threads)
+
+    def join_threads(self):
+        with self._lock:
+            threads, self.threads = self.threads, []
+            for thread in threads:
+                thread.join()
+    
+    def __len__(self):
+        return len(self.threads)
+
+class ThreadedImagesReader:
+    """Input image reader."""
+
+    def __init__(self, images, buffer_size=32):
+        self.images = images
+        self.total = len(images)
+        self.buffer_size = buffer_size
+        self.next_id = -1
+        self.buffer = []
+        self.threads = ThreadsHandler()
+        self._lock = Lock()
+        self._fill_buffer()
+
+    def is_open(self):
+        self.threads.clean_threads()
+        return (
+            self.__is_open() or
+            len(self.buffer) or
+            len(self.threads)
+        )
+
+    def __is_open(self):
+        return self.next_id < self.total
+
+    def __get_next_id(self):
+        with self._lock:
+            self.next_id += 1
+            return self.next_id
+
+    def __read_to_buffer(self):
+        try:
+            image_path = self.images[self.__get_next_id()]
+        except IndexError:
+            return
+        image = cv2.imread(image_path)
+        if image is not None:
+            self.buffer.append((image_path, image))
+        else:
+            print(f"[ERROR] Coudn't read image with path {image_path}")
+
+    def start_new_thread(self):
+        self.threads.add(target=self.__read_to_buffer, args=(), name=str(self.next_id))
+
+    def _fill_buffer(self):
+        with self._lock:
+            if self.__is_open():
+                items_left = self.total - self.next_id
+                n_fill = min(self.buffer_size - len(self.buffer), items_left)
+                for _ in range(n_fill):
+                    self.start_new_thread()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if not self.is_open():
+            raise StopIteration
+        n_tries = 0
+        while self.is_open():
+            if len(self.buffer):
+                if self.__is_open():
+                    self.start_new_thread()
+                return self.buffer.pop(0)
+            n_tries += 1
+            if n_tries % 50 == 0:
+                self.threads.join_threads()
+        raise StopIteration
