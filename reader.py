@@ -2,6 +2,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 import os
 from threading import Thread, Lock
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 import cv2
 import numpy as np
@@ -118,8 +119,11 @@ class ImageEffectReader:
         self.__dict__.update(kwargs)
         self.loaded, self.annotations = [], []
         # Load image annotations.
-        load_func = (self.load_csv_annotations if self.annot_type == 'csv'
-                     else self.load_coco_annotations)
+        load_func = {
+            'coco': self.load_coco_annotations,
+            'csv': self.load_csv_annotations,
+            None: lambda: {os.path.split(p)[1]: None for p in paths},
+        }[self.annot_type]
         annotations = load_func()
         # Load images.
         for png_path in self.paths:
@@ -177,91 +181,90 @@ class ImageEffectReader:
             if self.annot_type == 'csv':
                 segments = get_corners(self.annotations[e_info.idx][:, :4])
                 e_cats = self.annotations[e_info.idx][:, 4]
-            else:
+            elif self.annot_type == 'coco':
                 for obj in self.annotations[e_info.idx]:
                     segment, cat = get_segments_and_cats_from_obj(obj, self.cats)
                     segments.append(segment)
                     e_cats.append(cat)
+            else:
+                segments, e_cats = [], []
         return e_image, segments, e_cats
 
 
-class ThreadsHandler:
+class ThreadPoolHelper:
 
-    def __init__(self):
-        self.threads = []
-        self._lock = Lock()
+    def __init__(self, max_workers=None, write_out=True):
+        self.pool = ThreadPoolExecutor(max_workers=max_workers)
+        self.write_out = write_out
+        self.futures = []
     
-    def add(self, target, args=None, name=None):
-        thread = Thread(target=target, args=args, name=name)
-        thread.start()
-        self.threads.append(thread)
+    def submit(self, func, *args, **kwargs):
+        future = self.pool.submit(func, *args, **kwargs)
+        self.futures.append(future)
+        self.check_status()
+        return future
     
-    def append(self, thread):
-        self.threads.append(thread)
+    def shutdown(self, wait=True):
+        return self.pool.shutdown(wait)
+    
+    def check_status(self):
+        futures, self.futures = self.futures, []
+        for future in futures:
+            if future.done():
+                code, res = future.result()
+                # If Error, print it
+                if code == False:
+                    print(res)
+            else:
+                self.futures.append(future)
 
-    def clean_threads(self):
-        with self._lock:
-            threads, self.threads = self.threads, []
-            threads = [thread for thread in threads if not thread.is_alive()]
-            self.threads.extend(threads)
-
-    def join_threads(self):
-        with self._lock:
-            threads, self.threads = self.threads, []
-            for thread in threads:
-                thread.join()
-    
-    def __len__(self):
-        return len(self.threads)
 
 class ThreadedImagesReader:
     """Input image reader."""
 
-    def __init__(self, images, buffer_size=32):
+    def __init__(self, images, buffer_size=32, max_workers=None):
         self.images = images
         self.total = len(images)
         self.buffer_size = buffer_size
-        self.next_id = -1
-        self.buffer = []
-        self.threads = ThreadsHandler()
+        self.last_id = -1
+        self.pool = ThreadPoolExecutor(max_workers=max_workers)
+        self.futures = []
         self._lock = Lock()
         self._fill_buffer()
 
     def is_open(self):
-        self.threads.clean_threads()
         return (
             self.__is_open() or
-            len(self.buffer) or
-            len(self.threads)
+            len(self.futures)
         )
 
     def __is_open(self):
-        return self.next_id < self.total
+        return self.last_id < self.total
 
     def __get_next_id(self):
         with self._lock:
-            self.next_id += 1
-            return self.next_id
+            self.last_id += 1
+            return self.last_id
 
     def __read_to_buffer(self):
         try:
             image_path = self.images[self.__get_next_id()]
         except IndexError:
-            return
+            return None
         image = cv2.imread(image_path)
         if image is not None:
-            self.buffer.append((image_path, image))
+            return (image_path, image)
         else:
-            print(f"[ERROR] Coudn't read image with path {image_path}")
+            return "[ERROR] Coudn't read image with path {image_path}"
 
     def start_new_thread(self):
-        self.threads.add(target=self.__read_to_buffer, args=(), name=str(self.next_id))
+        self.futures.append(self.pool.submit(self.__read_to_buffer))
 
     def _fill_buffer(self):
         with self._lock:
             if self.__is_open():
-                items_left = self.total - self.next_id
-                n_fill = min(self.buffer_size - len(self.buffer), items_left)
+                items_left = self.total - self.last_id
+                n_fill = min(self.buffer_size - len(self.futures), items_left)
                 for _ in range(n_fill):
                     self.start_new_thread()
 
@@ -271,15 +274,14 @@ class ThreadedImagesReader:
     def __next__(self):
         if not self.is_open():
             raise StopIteration
-        n_tries = 0
         while self.is_open():
-            if len(self.buffer):
-                if self.__is_open():
-                    self.start_new_thread()
-                return self.buffer.pop(0)
-            n_tries += 1
-            if n_tries % 50 == 0:
-                self.threads.join_threads()
-                if self.__is_open():
-                    self.start_new_thread()
+            if self.__is_open():
+                self.start_new_thread()
+            if len(self.futures):
+                future = self.futures.pop(0)
+                res = future.result()
+                if isinstance(res, str):
+                    print(res)
+                elif res is not None:
+                    return res
         raise StopIteration

@@ -11,9 +11,9 @@ from dataclasses import dataclass
 import cv2
 from tqdm import tqdm
 
-from augment import Augmentations
+from augment import Augmentations, AugmentationConfig
 from writer import COCO_writer
-from reader import VideoEffectReader, ImageEffectReader, ThreadsHandler, ThreadedImagesReader
+from reader import VideoEffectReader, ImageEffectReader, ThreadedImagesReader, ThreadPoolHelper
 from bbox_utils import get_scale_ratio, resize_by_max_side
 
 
@@ -28,22 +28,18 @@ def sort_by_digits_in_name(path):
 
 def process_image(frame, augmentations, writer=None, frame_num=None):
     for augment in augmentations:
-        frame, debug_frame = augment.augment(frame, writer, frame_num)
+        frame, debug_frame = augment(frame, writer, frame_num)
     return frame, debug_frame if debug_frame is not None else frame
 
 
 def write_image_and_test_out(path, image):
-    cv2.imwrite(path, image)
-    if not (os.path.isfile(path) and os.path.getsize(path)) > 0:
-        print(f"[ERROR] Failed to save augmented image to {path}")
-
-
-def process_and_write_image(image, augmentations, writer, image_num, out_ipath, write_debug):
-        image, debug_image = process_image(image, augmentations, writer, image_num)
-        out_img = debug_image if write_debug else image
-        thread = threading.Thread(target=write_image_and_test_out, args=(out_ipath, out_img))
-        thread.start()
-        return debug_image, thread
+    try:
+        cv2.imwrite(path, image)
+        if not (os.path.isfile(path) and os.path.getsize(path)) > 0:
+            raise ValueError
+    except:
+        return (False, f"[ERROR] Failed to save augmented image to {path}")
+    return (True, None)
 
 
 def draw_debug(debug_frame):
@@ -53,7 +49,7 @@ def draw_debug(debug_frame):
 
 
 def process_video(in_video_path, augmentations, out_path,
-                  writer=None, show_debug=False, write_debug=False):
+                  writer=None, show_debug=False, write_debug=False, max_workers=None):
     in_stream = cv2.VideoCapture(in_video_path)
     is_exit = False
 
@@ -67,7 +63,7 @@ def process_video(in_video_path, augmentations, out_path,
     pbar = tqdm(total=total_frames, desc=f'Processing {in_video_path}')
     image_num = None
     frame_num = 0
-    write_threads = ThreadsHandler()
+    write_pool = ThreadPoolHelper(max_workers=max_workers)
     try:
         while in_stream.isOpened():
             _, image = in_stream.read()
@@ -81,11 +77,9 @@ def process_video(in_video_path, augmentations, out_path,
                 frame_num += 1
                 image_name = f'{frame_num:0>7}.jpg'
             out_ipath = os.path.join(out_path, image_name)
-            debug_image, thread = process_and_write_image(
-                image, augmentations, writer,
-                image_num, out_ipath, write_debug
-            )
-            write_threads.append(thread)
+            image, debug_image = process_image(image, augmentations, writer, image_num)
+            debug_image = debug_image if write_debug else image
+            write_pool.submit(write_image_and_test_out, out_ipath, image)
             pbar.update(1)
 
             if show_debug and draw_debug(debug_frame):
@@ -96,11 +90,10 @@ def process_video(in_video_path, augmentations, out_path,
     finally:
         # Close streams.
         pbar.close()
-        tqdm.write('Closing in_stream')
+        tqdm.write('Closing streams...')
         in_stream.release()
-        tqdm.write('Closed')
-        tqdm.write('Closing out streams')
-        write_threads.join_threads()
+        write_pool.shutdown(wait=True)
+        tqdm.write('Closed.')
         cv2.destroyAllWindows()
         return is_exit
 
@@ -140,24 +133,26 @@ def get_coco_writer():
 
 
 def process_images(image_paths, augmentations, out_path,
-                   writer=None, show_debug=False, write_debug=False, n_workers=None):
-    buffer_size = 32
+                   writer=None, show_debug=False, write_debug=False, max_workers=None):
     is_exit = False
-    image_reader = ThreadedImagesReader(image_paths, buffer_size=buffer_size)
-    pbar = tqdm(total=len(image_paths))
+    image_reader = ThreadedImagesReader(
+        image_paths,
+        buffer_size=32,
+        max_workers=max_workers
+    )
     image_num = None
-    write_threads = ThreadsHandler()
+    write_pool = ThreadPoolHelper(max_workers=max_workers)
+    pbar = tqdm(total=len(image_paths))
+    futures = []
     try:
-        for image_path, image in image_reader:
+        for i, (image_path, image) in enumerate(image_reader):
             image_name = os.path.split(image_path)[1]
             out_ipath = os.path.join(out_path, image_name)
             if writer:
                 image_num, _ = writer.add_frame(*image.shape[:2], out_ipath)
-            debug_image, thread = process_and_write_image(
-                image, augmentations, writer,
-                image_num, out_ipath, write_debug
-            )
-            write_threads.append(thread)
+            image, debug_image = process_image(image, augmentations, writer, image_num)
+            debug_image = debug_image if write_debug else image
+            write_pool.submit(write_image_and_test_out, out_ipath, image)
             pbar.update(1)
 
             if show_debug and draw_debug(debug_image):
@@ -171,7 +166,9 @@ def process_images(image_paths, augmentations, out_path,
     finally:
         # Close streams.
         pbar.close()
-        write_threads.join_threads()
+        tqdm.write('Closing streams...')
+        write_pool.shutdown(wait=True)
+        tqdm.write('Closed.')
         cv2.destroyAllWindows()
         return is_exit
 
@@ -205,20 +202,31 @@ def get_args():
                         action='store_true', help='Write the coco annotations')
     parser.add_argument('--clean_out',
                         action='store_true', help='Clean out folder before starting')
-    parser.add_argument('--n_workers', default=None,
+    parser.add_argument('--skip_annotated', action='store_true',
+                        help='skip annotated files')
+    parser.add_argument('--max_workers', default=None,
                         type=int, help='number of threads to use')
-    parser.add_argument('--e_config', default=None,
-                        help='path to the config file for augmentations')
+    parser.add_argument('--e_configs', default=None, nargs='+',
+                        help='paths to the config files for augmentations')
     parser.add_argument('--e_paths', default=None, nargs='+',
                         help='path for the effects')
     parser.add_argument('--use_alpha', default=None,
                         help='use alpha channel. binary in format `0,1,0,1`')
     parser.add_argument('--preload', default=None,
                         help='preload image effects. binary in format `0,1,0,1`')
-    parser.add_argument('--skip_annotated', action='store_true',
-                        help='skip annotated files')
     parser.add_argument('--probability', default=None,
                         help='probability of choosing this kind of effects. number in format `1,2,3,4`')
+    parser.add_argument('--min_n_objects', type=int, default=1,
+                        help='min amount of objects in one frame')
+    parser.add_argument('--max_n_objects', type=int, default=1,
+                        help='max amount of objects in one frame')
+    parser.add_argument('--gen_prob', type=int, default=1,
+                        help='Generation probability of 1 object: 1 / gen_prob')
+    parser.add_argument('--next_gen_prob', type=int, default=0,
+                        help="Gen prob of (n + 1)'th object: 1 / (gen_prob + (n - 1) * next_gen_prob)")
+    parser.add_argument('--debug_level', type=int, default=0,
+                        help="Debug level: 0 = nothing; 1 + bboxes and offset point; 2 + effect info")
+
     args = parser.parse_args()
 
     args.kwargs = []
@@ -230,6 +238,7 @@ def get_args():
         args.kwargs.append(['probability'] + [int(a) for a in args.probability.split(',')])
     args.kwargs = list(zip(*args.kwargs))
     return args
+
 
 def create_folder(path, clean_out):
     try:
@@ -267,8 +276,8 @@ if __name__ == "__main__":
         print('Not writing annotaions!')
 
     # Get path for effects
-    e_readers = []
-    for path, kwargs in zip(args.e_paths, e_kwargs):
+    e_readers, e_cfgs = [], []
+    for i, (path, kwargs) in enumerate(zip(args.e_paths, e_kwargs)):
         files = [os.path.join(path, f) for f in os.listdir(path)]
         files = [f for f in files if os.path.isfile(f)]
         image_files, video_files = [], []
@@ -278,16 +287,27 @@ if __name__ == "__main__":
                 image_files.append(file_path)
             elif ext in e_video_exts:
                 video_files.append(file_path)
-        
+
+        config_path = args.e_configs[i] if len(args.e_configs) > i else args.e_configs[0]
+        config_path = os.path.join('configs', config_path + '_config.yaml')
+        cfg = AugmentationConfig(config_path)
+
         if len(image_files):
             e_readers.append(ImageEffectReader(image_files, **kwargs))
+            e_cfgs.append(cfg)
         if len(video_files):
             e_readers.append(VideoEffectReader(video_files, **kwargs))
+            e_cfgs.append(cfg)
 
     # Augmentations
     augment = Augmentations(
         e_readers,
-        config_path=args.e_config,
+        configs=e_cfgs,
+        min_n_objects=args.min_n_objects,
+        max_n_objects=args.max_n_objects,
+        debug_level=args.debug_level,
+        gen_prob=args.gen_prob,
+        next_gen_prob=args.next_gen_prob,
     )
 
     augmentations = [
@@ -326,8 +346,13 @@ if __name__ == "__main__":
             raise ValueError(f'Unsupported extention! ({args.in_extention})')
         data_out_path = os.path.join(out_path, 'images')
         create_folder(data_out_path, args.clean_out)
-        is_exit = process_fn(file_paths, augmentations, data_out_path,
-                             coco_writer, args.show_debug, args.write_debug)
+        is_exit = process_fn(
+            file_paths, augmentations, data_out_path,
+            coco_writer, 
+            show_debug=args.show_debug,
+            write_debug=args.write_debug,
+            max_workers=args.max_workers
+        )
         # Write annotations
         if args.write_annotations:
             create_folder(os.path.split(annot_out_path)[0], args.clean_out)

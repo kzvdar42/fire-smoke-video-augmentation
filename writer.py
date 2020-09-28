@@ -89,4 +89,10 @@ class COCO_writer:
         result['licenses'] = None
         result['info'] = None
         with open(save_path, 'w') as out_file:
-            json.dump(result, out_file, cls=NumpyEncoder)
+            json.dump(
+                result,
+                out_file,
+                indent=2,
+                ensure_ascii=False,
+                cls=NumpyEncoder,
+            )

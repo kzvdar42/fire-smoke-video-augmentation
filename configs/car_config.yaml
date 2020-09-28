@@ -1,0 +1,45 @@
+do_resize: True
+# Size limits
+# mean size in regards to bigger image side
+min_size_far: 0.05
+min_size_close: 0.8
+# Jitter the size using next formula:
+# size = random(min_size, min_size * (1 + size_jitter))
+size_jitter: 0.35
+
+do_flip: True
+flip_chance: 2 # 1 / chance
+
+do_rotate: True
+max_angle: 20
+
+do_brightness: True
+# gain_loc: 1 gain_scale: 0.15 ~ from: 0.40 to: 1.6  mean: 1.00
+# gain_loc: 1 gain_scale: 0.075 ~ from: 0.70 to: 1.3  mean: 1.00
+# gain_loc: 1 gain_scale: 0.05 ~ from: 0.80 to: 1.2  mean: 1.00
+gain_loc: 1
+gain_scale: 0.025
+# bias_loc: 0 bias_scale: 10 ~ from: -40 to: 40 mean: 0
+# bias_loc: 0 bias_scale: 5  ~ from: -20 to: 20 mean: 0
+bias_loc: 0
+bias_scale: 2.5
+
+# Gamma correction control
+do_gamma: True
+gamma_from: 0.8
+gamma_to: 1.05
+
+# Blur contour of effect
+do_blur: True
+blur_radius: 7
+contour_radius: 7
+
+min_transparency: 80
+max_transparency: 100
+
+# Duration limits
+min_duration: 1
+max_duration: 1
+
+# Drop all bboxes which small side is less than min_bbox_size
+min_bbox_size: 30
