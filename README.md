@@ -38,8 +38,8 @@ Script supports a list of flags:
 * `--preload` - preload image effects. Binary format (`0,1,0,1`), default is 0
 * `--min_n_objects` - minimum amount of objects in one frame, default is 1
 * `--max_n_objects` - maximum amount of objects in one frame, default is 1
-* `--gen_prob` - probability of generation of 1 object: $\frac{1}{\text{gen_prob}}$, default is 1
-* `--next_gen_prob` - probability of generation of (n + 1)'th object: $\frac{1}{(\text{gen_prob} + (n - 1) * \text{next_gen_prob})}$, default is 0
+* `--gen_prob` - probability of generation of 1 object: `1 / gen_prob`, default is 1
+* `--next_gen_prob` - probability of generation of (n + 1)'th object: `1 / (gen_prob + (n - 1) * next_gen_prob)`, default is 0
 
 #### Debug info
 Also, there are debug flags. You can change `--debug_level` flag to next levels:
