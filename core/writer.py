@@ -68,6 +68,8 @@ class COCO_writer:
     def add_annotation(self, image_id, bbox, track_id, category_id, segmentation=None):
         area = int(bbox[1] * bbox[3])
 
+        assert image_id is not None
+
         self.annotations.append({
             'image_id': image_id,
             'segmentation': segmentation,
@@ -96,3 +98,37 @@ class COCO_writer:
                 ensure_ascii=False,
                 cls=NumpyEncoder,
             )
+
+
+def get_coco_writer():
+    return COCO_writer([
+        {
+            'name': 'person',
+            'supercategory': '',
+            'id': 1,
+        },
+        {
+            'name': 'vehicle',
+            'supercategory': '',
+            'id': 2,
+        },
+        {
+            'name': 'fire',
+            'supercategory': '',
+            'id': 3,
+        },
+        {
+            'name': 'animal',
+            'supercategory': '',
+            'id': 4,
+        },
+        {
+            'name': 'smoke',
+            'supercategory': '',
+            'id': 5,
+        },
+    ],
+    synonyms={
+        'vehicle': ['Car']
+    }
+    )

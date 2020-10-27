@@ -11,7 +11,7 @@ do_flip: True
 flip_chance: 2 # 1 / chance
 
 do_rotate: True
-max_angle: 30
+max_angle: 12
 
 do_brightness: True
 # gain_loc: 1 gain_scale: 0.15 ~ from: 0.40 to: 1.6  mean: 1.00
@@ -29,12 +29,22 @@ do_gamma: True
 gamma_from: 0.8
 gamma_to: 1.05
 
+# Add shadow to the object
+do_shadow: True
+shadow_blur_radius: 51
+shadow_x_min: -90
+shadow_x_max: 90
+shadow_y_min: -190
+shadow_y_max: 90
+min_shadow_trans: 30
+max_shadow_trans: 90
+
 # Blur contour of effect
 do_blur: True
 blur_radius: 7
 contour_radius: 7
 
-min_transparency: 80
+min_transparency: 92
 max_transparency: 100
 
 # Duration limits

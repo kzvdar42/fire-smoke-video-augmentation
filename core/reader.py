@@ -7,7 +7,11 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import cv2
 import numpy as np
 from pycocotools.coco import COCO
-from bbox_utils import (convert_xywh_xyxy, get_corners, prepare_image)
+from utils.get_image_info import get_image_size
+from utils.bbox_utils import (convert_xywh_xyxy, get_corners, prepare_image)
+
+def get_bboxes_from_obj(obj):
+    bbox = convert_xywh_xyxy(obj['bbox'], width, height)
 
 def get_segments_and_cats_from_obj(obj, cats):
     # If no segmentation, get box corners
@@ -39,10 +43,16 @@ class VideoEffectReader:
         # Override values by kwargs
         self.__dict__.update(kwargs)
         self.total_frames = []
+        self.frame_shapes = []
         self.loaded, self.annotations = [], []
         # Load mov effects.
         for mov_path in self.paths:
             cap = cv2.VideoCapture(mov_path)
+            # Get width and height
+            width  = cap.get(cv2.CAP_PROP_FRAME_WIDTH)  # float
+            height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT) # float
+            self.frame_shapes.append((height, width))
+
             # XXX: This should work, but in my case it fails
             # https://github.com/opencv/opencv/pull/13395
             # print(cap.set(cv2.CAP_PROP_CONVERT_RGB, 0))
@@ -63,6 +73,10 @@ class VideoEffectReader:
             else:
                 self.annotations.append(None)
 
+
+    def get_frame_shape(self, video_idx):
+        return self.frame_shapes[video_idx]
+    
 
     def get_frame(self, e_info, use_alpha=None, read_annot=False):
         use_alpha = use_alpha if use_alpha is not None else self.use_alpha
@@ -135,6 +149,14 @@ class ImageEffectReader:
                     self.loaded.append(png_path)
             png_file_name = os.path.split(png_path)[1]
             self.annotations.append(annotations[png_file_name])
+
+    def get_frame_shape(self, frame_idx):
+        e_image = self.loaded[frame_idx]
+        if isinstance(e_image, str):
+            shape = get_image_size(e_image)
+        else:
+            shape = e_image.shape[:2]
+        return shape
 
     def load_image(self, path):
         e_image = cv2.imread(path, cv2.IMREAD_UNCHANGED)
@@ -223,7 +245,7 @@ class ThreadedImagesReader:
     """Input image reader."""
 
     def __init__(self, images, buffer_size=32, max_workers=None):
-        self.images = images
+        self.images = [image.replace('\\', '/') for image in images]
         self.total = len(images)
         self.buffer_size = buffer_size
         self.last_id = -1

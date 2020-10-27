@@ -10,11 +10,12 @@ from dataclasses import dataclass
 
 import cv2
 from tqdm import tqdm
+from pycocotools.coco import COCO
 
-from augment import Augmentations, AugmentationConfig
-from writer import COCO_writer
-from reader import VideoEffectReader, ImageEffectReader, ThreadedImagesReader, ThreadPoolHelper
-from bbox_utils import get_scale_ratio, resize_by_max_side
+from core.augment import Augmentations, AugmentationConfig
+from core.writer import get_coco_writer
+from core.reader import VideoEffectReader, ImageEffectReader, ThreadedImagesReader, ThreadPoolHelper
+from utils.bbox_utils import get_scale_ratio, resize_by_max_side, convert_xywh_xyxy
 
 
 def get_int_from_str(s):
@@ -26,9 +27,9 @@ def sort_by_digits_in_name(path):
   return get_int_from_str(os.path.splitext(os.path.split(path)[1])[0])
 
 
-def process_image(frame, augmentations, writer=None, frame_num=None):
+def process_image(frame, augmentations, f_boxes=None, writer=None, frame_num=None):
     for augment in augmentations:
-        frame, debug_frame = augment(frame, writer, frame_num)
+        frame, debug_frame = augment(frame, f_boxes=f_boxes, writer=writer, frame_num=frame_num)
     return frame, debug_frame if debug_frame is not None else frame
 
 
@@ -45,11 +46,13 @@ def write_image_and_test_out(path, image):
 def draw_debug(debug_frame):
     debug_frame = cv2.resize(debug_frame, (1280, 720))
     cv2.imshow('Debug', debug_frame)
-    return cv2.waitKey(1) & 0xFF == ord('q')
+    return cv2.waitKey(0) & 0xFF == ord('q')
 
 
 def process_video(in_video_path, augmentations, out_path,
-                  writer=None, show_debug=False, write_debug=False, max_workers=None):
+                  writer=None, show_debug=False, write_debug=False, in_annotations=None, max_workers=None):
+    if in_annotations is not None:
+        raise NotImplementedError('Not yet implemented for video sources.')
     in_stream = cv2.VideoCapture(in_video_path)
     is_exit = False
 
@@ -77,16 +80,20 @@ def process_video(in_video_path, augmentations, out_path,
                 frame_num += 1
                 image_name = f'{frame_num:0>7}.jpg'
             out_ipath = os.path.join(out_path, image_name)
-            image, debug_image = process_image(image, augmentations, writer, image_num)
-            debug_image = debug_image if write_debug else image
+            image, debug_image = process_image(image, augmentations,
+                                               writer=writer, frame_num=image_num)
+            image = debug_image if write_debug else image
             write_pool.submit(write_image_and_test_out, out_ipath, image)
             pbar.update(1)
 
-            if show_debug and draw_debug(debug_frame):
-                break
+            if show_debug and draw_debug(debug_image):
+                raise KeyboardInterrupt()
     except KeyboardInterrupt:
         tqdm.write('Exited.')
         is_exit = True
+    except Exception:
+        tqdm.write('Error!')
+        traceback.print_exc()
     finally:
         # Close streams.
         pbar.close()
@@ -98,42 +105,9 @@ def process_video(in_video_path, augmentations, out_path,
         return is_exit
 
 
-def get_coco_writer():
-    return COCO_writer([
-        {
-            'name': 'person',
-            'supercategory': '',
-            'id': 0,
-        },
-        {
-            'name': 'vehicle',
-            'supercategory': '',
-            'id': 1,
-        },
-        {
-            'name': 'fire',
-            'supercategory': '',
-            'id': 2,
-        },
-        {
-            'name': 'animal',
-            'supercategory': '',
-            'id': 3,
-        },
-        {
-            'name': 'smoke',
-            'supercategory': '',
-            'id': 4,
-        },
-    ],
-    synonyms={
-        'vehicle': ['Car']
-    }
-    )
-
-
 def process_images(image_paths, augmentations, out_path,
-                   writer=None, show_debug=False, write_debug=False, max_workers=None):
+                   writer=None, show_debug=False, write_debug=False,
+                   in_annotations=None, max_workers=None):
     is_exit = False
     image_reader = ThreadedImagesReader(
         image_paths,
@@ -144,19 +118,35 @@ def process_images(image_paths, augmentations, out_path,
     write_pool = ThreadPoolHelper(max_workers=max_workers)
     pbar = tqdm(total=len(image_paths))
     futures = []
+    skipped_counter = 0
     try:
         for i, (image_path, image) in enumerate(image_reader):
+            pbar.set_description(f'Skipped {skipped_counter} - {image_path}')
             image_name = os.path.split(image_path)[1]
             out_ipath = os.path.join(out_path, image_name)
             if writer:
                 image_num, _ = writer.add_frame(*image.shape[:2], out_ipath)
-            image, debug_image = process_image(image, augmentations, writer, image_num)
-            debug_image = debug_image if write_debug else image
+            if in_annotations:
+                height, width = image.shape[:2]
+                rel_path = os.path.relpath(image_path, in_annotations.root_path).replace('\\', '/')
+                # Get annotations for the frame, otherwise skip the image
+                try:
+                    f_ann_ids = in_annotations.getAnnIds(imgIds=in_annotations.path2img_id[rel_path], iscrowd=None)
+                    f_objects = in_annotations.loadAnns(f_ann_ids)
+                    f_boxes = [convert_xywh_xyxy(obj['bbox'], width, height) for obj in f_objects]
+                    f_cats = [in_annotations.cats[obj['category_id']]['name'] for obj in f_objects]
+                except KeyError:
+                    skipped_counter += 1
+                    pbar.update(1)
+                    continue
+            image, debug_image = process_image(image, augmentations, f_boxes=(f_boxes, f_cats),
+                                               writer=writer, frame_num=image_num)
+            image = debug_image if write_debug else image
             write_pool.submit(write_image_and_test_out, out_ipath, image)
             pbar.update(1)
 
             if show_debug and draw_debug(debug_image):
-                break
+                raise KeyboardInterrupt()
     except KeyboardInterrupt:
         tqdm.write('Exited.')
         is_exit = True
@@ -194,16 +184,18 @@ def get_args():
     parser.add_argument('out_path', help='path for the output images')
     parser.add_argument('--in_extention', default='jpg',
                         help='in file extention, support png/jpg/mp4/avi')
+    parser.add_argument('--in_annotations', default=None,
+                        help='in files coco annotation file')
     parser.add_argument('--show_debug', action='store_true',
                         help='show debug window')
     parser.add_argument('--write_debug', action='store_true',
                         help='write debug info to output')
-    parser.add_argument('--write_annotations',
-                        action='store_true', help='Write the coco annotations')
+    parser.add_argument('--skip_annotations',
+                        action='store_true', help='Do not write the coco annotations')
     parser.add_argument('--clean_out',
                         action='store_true', help='Clean out folder before starting')
-    parser.add_argument('--skip_annotated', action='store_true',
-                        help='skip annotated files')
+    parser.add_argument('--skip_augmented', action='store_true',
+                        help='skip augmented files')
     parser.add_argument('--max_workers', default=None,
                         type=int, help='number of threads to use')
     parser.add_argument('--e_configs', default=None, nargs='+',
@@ -225,7 +217,7 @@ def get_args():
     parser.add_argument('--next_gen_prob', type=int, default=0,
                         help="Gen prob of (n + 1)'th object: 1 / (gen_prob + (n - 1) * next_gen_prob)")
     parser.add_argument('--debug_level', type=int, default=0,
-                        help="Debug level: 0 = nothing; 1 + bboxes and offset point; 2 + effect info")
+                        help="Debug level")
 
     args = parser.parse_args()
 
@@ -262,6 +254,7 @@ def get_subfolders_with_files(path, file_ext):
 if __name__ == "__main__":
     args = get_args()
     coco_writer = None
+    in_annotations = None
     e_video_exts = ['webm']
     video_exts = ['mp4', 'avi']
     image_exts = ['jpg', 'png']
@@ -272,8 +265,17 @@ if __name__ == "__main__":
             e_kwargs[i] = {k:v for k, v in zip(keys, values)}
 
     print('OpenCV is optimized:', cv2.useOptimized())
-    if not args.write_annotations:
+    if args.skip_annotations:
         print('Not writing annotaions!')
+
+    if args.in_annotations is not None:
+        in_annotations = COCO(args.in_annotations)
+        print('Building path to img id mapping...')
+        path2img_id = dict()
+        for img in in_annotations.imgs.values():
+            path2img_id[img['file_name']] = img['id']
+        in_annotations.__dict__['root_path'] = args.in_path
+        in_annotations.__dict__['path2img_id'] = path2img_id
 
     # Get path for effects
     e_readers, e_cfgs = [], []
@@ -289,7 +291,7 @@ if __name__ == "__main__":
                 video_files.append(file_path)
 
         config_path = args.e_configs[i] if len(args.e_configs) > i else args.e_configs[0]
-        config_path = os.path.join('configs', config_path + '_config.yaml')
+        config_path = os.path.join('configs', config_path + '.yaml')
         cfg = AugmentationConfig(config_path)
 
         if len(image_files):
@@ -313,10 +315,13 @@ if __name__ == "__main__":
     augmentations = [
         augment
     ]
+
+    # Get the list of subfolders with such files
     subfolders = list(get_subfolders_with_files(args.in_path, args.in_extention))
     if len(subfolders) == 0:
         print(f'No files with ext `.{args.in_extention}` found!')
         exit(0)
+    # Start augmenting files in each subfolder
     fold_pbar = tqdm(subfolders)
     for file_paths in fold_pbar:
         file_paths.sort(key=sort_by_digits_in_name)
@@ -330,10 +335,10 @@ if __name__ == "__main__":
             out_path = os.path.join(out_path, first_file_name)
         annot_out_path = os.path.join(out_path, 'annotations', 'instances_default.json')
         # Skip already annotated
-        if args.skip_annotated and os.path.isfile(annot_out_path):
-            tqdm.write(f"Skipping {annot_out_path} as it's already annotated")
+        if args.skip_augmented and os.path.isfile(annot_out_path):
+            tqdm.write(f"Skipping {annot_out_path} as it's already augmented")
             continue
-        if args.write_annotations:
+        if not args.skip_annotations:
             coco_writer = get_coco_writer()
         create_folder(out_path, args.clean_out)
         if args.in_extention in video_exts:
@@ -351,10 +356,11 @@ if __name__ == "__main__":
             coco_writer, 
             show_debug=args.show_debug,
             write_debug=args.write_debug,
-            max_workers=args.max_workers
+            in_annotations=in_annotations,
+            max_workers=args.max_workers,
         )
         # Write annotations
-        if args.write_annotations:
+        if not args.skip_annotations:
             create_folder(os.path.split(annot_out_path)[0], args.clean_out)
             tqdm.write(f'Writing annotations to {annot_out_path}')
             coco_writer.write_result(annot_out_path)

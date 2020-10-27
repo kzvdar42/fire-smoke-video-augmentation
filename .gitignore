@@ -134,4 +134,5 @@ source_videos/*
 effects
 ufa
 output/*
+out
 !output/run_annot.py

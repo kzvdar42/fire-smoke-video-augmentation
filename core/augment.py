@@ -5,22 +5,25 @@ import yaml
 import cv2
 from tqdm import tqdm
 import numpy as np
-from reader import VideoEffectReader, ImageEffectReader
-from bbox_utils import (convert_xywh_xyxy, convert_xyxy_xywh,
+from core.reader import VideoEffectReader, ImageEffectReader
+from utils.bbox_utils import (convert_xywh_xyxy, convert_xyxy_xywh,
                         blur_contour, resize, rotate, flip,
-                        gamma_correction)
+                        add_shadow, gamma_correction,
+                        get_intersection)
 
 
 @dataclass
-class Effect:
+class EffectInfo:
     reader_id: int
     idx: int
     track_id: int
-    size: int
+    shape: tuple
     offset: tuple
+    transparency: float
+    shadow_off: tuple
+    shadow_trans: float
     angle: float
     is_flip: bool
-    transparency: float
     gain: float  # contrast
     bias: float  # brightness
     gamma: float  # gamma correction
@@ -30,6 +33,10 @@ class Effect:
     segments: list = None
     e_cats: list = None
     c_offset: tuple = None # Centered offset
+
+    def get_bbox(self):
+        x1, y1 = self.c_offset
+        return [x1, y1, x1 + self.shape[1], y1 + self.shape[0]]
 
 
 @dataclass(init=None)
@@ -58,6 +65,15 @@ class AugmentationConfig:
     do_blur: bool = True
     blur_radius: int = 5
     contour_radius: int = 5
+
+    do_shadow: bool = True
+    shadow_blur_radius: int = 51
+    shadow_x_min: int = -20
+    shadow_x_max: int = 20
+    shadow_y_min: int = -10
+    shadow_y_max: int = 20
+    min_shadow_trans: int = 40
+    max_shadow_trans: int = 80
 
     min_transparency: int = 80
     max_transparency: int = 100
@@ -95,7 +111,7 @@ class Augmentations:
         # Override values by kwargs
         self.__dict__.update(kwargs)
 
-    def create_effect(self, frame):
+    def _create_effect(self, frame, track_id=None):
         reader_id = np.random.choice(range(len(self.e_readers)), p=self.probabilities)
         reader = self.e_readers[reader_id]
         cfg = self.e_cfgs[reader_id]
@@ -107,25 +123,50 @@ class Augmentations:
             start_dur = np.random.randint(0, max(1, total_frames - cfg.min_duration))
             duration = min(total_frames - 1, duration + start_dur)
         angle = np.float32(np.random.uniform(-cfg.max_angle, cfg.max_angle))
-        # Make offset such that at least `min_size` of object is still visible.
+        # Calculate image size
         max_side = max(frame.shape[:2])
         min_size = int(cfg.min_size_far * max_side)
         y_offset = np.random.randint(min_size, max(frame.shape[0] - min_size, min_size + 1))
         min_size = cfg.min_size_far * frame.shape[0] + (cfg.min_size_close - cfg.min_size_far) * y_offset
         size = np.random.randint(int(min_size), int(min_size * (1 + cfg.size_jitter)) + 1)
-        low_x = -size // 2 + min_size
+        shape = reader.get_frame_shape(idx)
+        scale_ratio = size / max(shape)
+        shape = [int(s * scale_ratio) for s in shape]
+        # Make offset such that at least `min_size` of object is still visible
+        low_x = -shape[1] // 2 + min_size
         offset = [np.random.randint(low_x, max(frame.shape[1] - min_size, low_x + 1)),
                   y_offset]
+        # Center offset
+        c_offset = (offset[0] - shape[1] // 2,
+                    offset[1] - shape[0])
+        # Other attr
+        shadow_off = [np.random.uniform(cfg.shadow_x_min, cfg.shadow_x_max),
+                      np.random.uniform(cfg.shadow_y_min, cfg.shadow_y_max)]
         is_flip = np.random.randint(cfg.flip_chance) == 0
         transparency = np.float32(np.random.uniform(cfg.min_transparency, cfg.max_transparency) / 100)
+        shadow_trans = np.float32(np.random.uniform(cfg.min_shadow_trans, cfg.max_shadow_trans) / 100)
         gain = np.float32(np.random.normal(loc=cfg.gain_loc, scale=cfg.gain_scale))
         bias = np.float32(np.random.normal(loc=cfg.bias_loc, scale=cfg.bias_scale))
         gamma = np.float32(np.random.uniform(cfg.gamma_from, cfg.gamma_to))
-        # Add object to our dict.
+        return EffectInfo(
+            reader_id, idx, track_id, shape, offset, transparency,
+            shadow_off, shadow_trans, angle, is_flip, gain, bias, gamma,
+            duration=duration, cur_dur=start_dur, c_offset=c_offset,
+        )
+
+    def create_effect(self, frame, f_boxes=None):
         self.last_object_id += 1
-        self.add_effect(Effect(reader_id, idx, self.last_object_id,
-                               size, offset, angle, is_flip, transparency,
-                               gain, bias, gamma, duration=duration, cur_dur=start_dur))
+        bboxes = [e_i.get_bbox() for e_i in self.objects]
+        if f_boxes is not None:
+            bboxes.extend(f_boxes)
+        # Generate new effect, till it will not intersect with existing ones
+        while True:
+            e_info = self._create_effect(frame, self.last_object_id)
+            e_bbox = e_info.get_bbox()
+            if not any(get_intersection(e_bbox, bbox) for bbox in bboxes):
+                break
+        # Add object to our dict
+        self.add_effect(e_info)
 
     def add_effect(self, effect):
         self.objects.append(effect)
@@ -143,10 +184,7 @@ class Augmentations:
         # Merge using mask
         mask = img2[img2_y1:img2_y2, img2_x1:img2_x2, 3:] / 255
         orig_img, effect = img1[y1:y2, x1: x2], img2[img2_y1:img2_y2, img2_x1:img2_x2, :3]
-        # a, b, mask = np.asfortranarray(a), np.asfortranarray(b), np.asfortranarray(mask)
-        # a, b, mask = a.reshape(a.shape, order='F'), b.reshape(b.shape, order='F'), mask.reshape(mask.shape, order='F')
         img1[y1: y2, x1: x2] = np.clip(effect * mask + orig_img * (1 - mask), 0, 255)
-        # img1[y1: y2, x1: x2] = cv2.convertScaleAbs(effect * mask + orig_img * (1 - mask))
         return img1
 
 
@@ -163,6 +201,11 @@ class Augmentations:
 
     def transform_effect(self, e_image, e_info, segments):
         cfg = self.e_cfgs[e_info.reader_id]
+
+        # Resize image
+        if cfg.do_resize:
+            e_image, _, segments = resize(e_image, max(e_info.shape), segments=segments)
+
         # Transparency
         e_image[:, :, 3:] = e_image[:, :, 3:] * e_info.transparency
 
@@ -179,24 +222,37 @@ class Augmentations:
         if cfg.do_gamma:
             e_image[:, :, :3] = gamma_correction(
                 e_image[:, :, :3], e_info.gamma)
+        
+        # Add shadow
+        if cfg.do_shadow:
+            e_image, segments = add_shadow(
+                e_image, e_info.shadow_off, cfg.shadow_blur_radius,
+                e_info.shadow_trans, segments=segments, e_info=e_info,
+            )
 
         # Rotate image
         if cfg.do_rotate and e_info.angle:
             e_image, _, segments = rotate(e_image, e_info.angle, segments=segments)
-        
+
+        # Blur image
         if cfg.do_blur:
             e_image = blur_contour(e_image,
                 cfg.blur_radius, cfg.contour_radius)
 
-        # Resize image
-        if cfg.do_resize:
-            e_image, _, segments = resize(e_image, e_info.size, segments=segments)
         return e_image, segments
     
-    def __call__(self, frame, writer=None, frame_num=None):
+    def __call__(self, frame, f_boxes=None, writer=None, frame_num=None):
+        # TODO: Rename for better understanding that it's a tuple
+        f_boxes, f_cats = f_boxes
+        # Add frame objects to annotations
+        if writer is not None:
+            for bbox, cat in zip(f_boxes, f_cats):
+                b = convert_xyxy_xywh(bbox)
+                writer.add_annotation(frame_num, b, None,
+                                      writer.get_cat_id(cat))
         # Add new effects
         while len(self.objects) < self.min_n_objects:
-            self.create_effect(frame)
+            self.create_effect(frame, f_boxes=f_boxes)
         gen_prob = np.random.randint(self.gen_prob + len(self.objects) * self.next_gen_prob)
         if len(self.objects) < self.max_n_objects and gen_prob == 0:
             self.create_effect(frame)
@@ -229,16 +285,11 @@ class Augmentations:
                                      0.587 * e_image[:, :, 1:2] +
                                      0.114 * e_image[:, :, :1])
 
-            if e_info.c_offset is None:
-                # Correct the offset if it's wrong.
-                min_x_pos = -e_image.shape[1] // (2 * int(cfg.min_size_far * max(frame.shape[:2])))
-                if min_x_pos > e_info.offset[0]:
-                    e_info.offset = (min_x_pos, e_info.offset[1])
-                
-                # Center offset
-                e_info.c_offset = (e_info.offset[0] - e_image.shape[1] // 2,
-                                   e_info.offset[1] - e_image.shape[0])
 
+            # Correct the offset if it's wrong.
+            # min_x_pos = -e_image.shape[1] // (2 * int(cfg.min_size_far * max(frame.shape[:2])))
+            # if min_x_pos > e_info.offset[0]:
+            #     e_info.offset = (min_x_pos, e_info.offset[1])
 
             # Apply effect on image
             frame = self.merge_images(frame, e_image, e_info.c_offset)
@@ -249,7 +300,7 @@ class Augmentations:
                 eff_to_delete.append(i)
         
         # Write annotations and debug info
-        debug_frame = self.write_and_debug(frame, writer=writer)
+        debug_frame = self.write_and_debug(frame, writer=writer, frame_num=frame_num)
 
         # Delete expired effects
         for i in sorted(eff_to_delete, reverse=True):
@@ -266,16 +317,19 @@ class Augmentations:
             cfg = self.e_cfgs[e_info.reader_id]
             segments = e_info.segments
             # Create bboxes from segments
-            # Move bboxes to offset position
             if segments is not None:
                 h, w = frame.shape[:2]
                 for si, poly in enumerate(segments):
+                    # Move to offset position
                     poly += e_info.c_offset
+                    # Clip by frame borders
                     poly[:, :, 0] = np.clip(poly[:, :, 0], 0, w - 1)
                     poly[:, :, 1] = np.clip(poly[:, :, 1], 0, h - 1)
                     segments[si] = poly
+                    # Show segment contours
                     if self.debug_level > 2:
-                        cv2.drawContours(debug_frame, poly.astype(np.int32), -1, (0, 0, 255), 3)
+                        cv2.drawContours(debug_frame, poly.astype(np.int32), -1,
+                                        (0, 0, 255), thickness=3)
                 for poly, cat in zip(segments, e_info.e_cats):
                     bbox = cv2.boundingRect(poly.astype(np.int32))
                     min_side_size = min(bbox[2:])
@@ -292,7 +346,7 @@ class Augmentations:
                                                  writer.get_cat_id(cat))
             # draw a point there offset is
             if self.debug_level > 0:
-                cv2.circle(debug_frame, e_info.offset, 4, (0, 255, 0), 2)
+                cv2.circle(debug_frame, tuple(e_info.offset), 4, (0, 255, 0), 2)
             # Add effect info
             if self.debug_level > 3:
                 self.draw_effect_info(debug_frame, e_info)
@@ -318,7 +372,7 @@ class Augmentations:
         if cfg.do_flip:
             text.append(f'flip: {e_info.is_flip:1d}')
         if cfg.do_resize:
-            text.append(f'size: {e_info.size}')
+            text.append(f'shape: {e_info.shape}')
         if cfg.do_brightness:
             text.extend([f'gain: {e_info.gain:.2f}',
                          f'bias: {e_info.bias:.2f}'])
