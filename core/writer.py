@@ -2,12 +2,15 @@ import json
 
 import numpy as np
 
+
 class NumpyEncoder(json.JSONEncoder):
     """Class to encode the numpy arrays in json."""
+
     def default(self, obj):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
         return json.JSONEncoder.default(self, obj)
+
 
 class COCO_writer:
 
@@ -51,6 +54,7 @@ class COCO_writer:
         if filename is None:
             file_ext = file_ext if file_ext is not None else 'jpg'
             filename = f'{image_id:0>7}.{file_ext}'
+        filename = filename.replace('\\', '/')
         self.images.append({
             'height': height,
             'date_captured': None,

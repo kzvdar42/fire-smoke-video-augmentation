@@ -19,17 +19,21 @@ from utils.bbox_utils import get_scale_ratio, resize_by_max_side, convert_xywh_x
 
 
 def get_int_from_str(s):
-  # Extract only digit characters
-  s = ''.join([ch for ch in s if ch.isdigit()])
-  return int(s if len(s) else '0')
+    # Extract only digit characters
+    s = ''.join([ch for ch in s if ch.isdigit()])
+    return int(s if len(s) else '0')
+
 
 def sort_by_digits_in_name(path):
-  return get_int_from_str(os.path.splitext(os.path.split(path)[1])[0])
+    return get_int_from_str(os.path.splitext(os.path.split(path)[1])[0])
 
 
-def process_image(frame, augmentations, f_boxes=None, writer=None, frame_num=None):
+def process_image(frame, augmentations, f_box_cats=None, writer=None, frame_num=None):
+    if f_box_cats is None:
+        f_box_cats = ([], [])
     for augment in augmentations:
-        frame, debug_frame = augment(frame, f_boxes=f_boxes, writer=writer, frame_num=frame_num)
+        frame, debug_frame = augment(
+            frame, f_box_cats=f_box_cats, writer=writer, frame_num=frame_num)
     return frame, debug_frame if debug_frame is not None else frame
 
 
@@ -107,18 +111,19 @@ def process_video(in_video_path, augmentations, out_path,
 
 def process_images(image_paths, augmentations, out_path,
                    writer=None, show_debug=False, write_debug=False,
-                   in_annotations=None, max_workers=None):
+                   in_annots=None, max_workers=None):
     is_exit = False
     image_reader = ThreadedImagesReader(
         image_paths,
         buffer_size=32,
         max_workers=max_workers
     )
-    image_num = None
     write_pool = ThreadPoolHelper(max_workers=max_workers)
     pbar = tqdm(total=len(image_paths))
     futures = []
     skipped_counter = 0
+    image_num = None
+    f_box_cats = None
     try:
         for i, (image_path, image) in enumerate(image_reader):
             pbar.set_description(f'Skipped {skipped_counter} - {image_path}')
@@ -126,20 +131,21 @@ def process_images(image_paths, augmentations, out_path,
             out_ipath = os.path.join(out_path, image_name)
             if writer:
                 image_num, _ = writer.add_frame(*image.shape[:2], out_ipath)
-            if in_annotations:
+            if in_annots:
                 height, width = image.shape[:2]
-                rel_path = os.path.relpath(image_path, in_annotations.root_path).replace('\\', '/')
+                rel_path = os.path.relpath(image_path, in_annots.root_path).replace('\\', '/')
                 # Get annotations for the frame, otherwise skip the image
                 try:
-                    f_ann_ids = in_annotations.getAnnIds(imgIds=in_annotations.path2img_id[rel_path], iscrowd=None)
-                    f_objects = in_annotations.loadAnns(f_ann_ids)
+                    f_ann_ids = in_annots.getAnnIds(imgIds=in_annots.path2img_id[rel_path], iscrowd=None)
+                    f_objects = in_annots.loadAnns(f_ann_ids)
                     f_boxes = [convert_xywh_xyxy(obj['bbox'], width, height) for obj in f_objects]
-                    f_cats = [in_annotations.cats[obj['category_id']]['name'] for obj in f_objects]
+                    f_cats = [in_annots.cats[obj['category_id']]['name'] for obj in f_objects]
+                    f_box_cats = (f_boxes, f_cats)
                 except KeyError:
                     skipped_counter += 1
-                    pbar.update(1)
+                    # pbar.update(1)
                     continue
-            image, debug_image = process_image(image, augmentations, f_boxes=(f_boxes, f_cats),
+            image, debug_image = process_image(image, augmentations, f_box_cats=f_box_cats,
                                                writer=writer, frame_num=image_num)
             image = debug_image if write_debug else image
             write_pool.submit(write_image_and_test_out, out_ipath, image)
@@ -162,12 +168,14 @@ def process_images(image_paths, augmentations, out_path,
         cv2.destroyAllWindows()
         return is_exit
 
+
 def clean_folder_content(path):
     for root, dirs, files in os.walk(path):
         for f in files:
             os.unlink(os.path.join(root, f))
         for d in dirs:
             shutil.rmtree(os.path.join(root, d))
+
 
 def get_default_reader_kwargs():
     return {
@@ -223,11 +231,14 @@ def get_args():
 
     args.kwargs = []
     if args.use_alpha:
-        args.kwargs.append(['use_alpha'] + [bool(int(a)) for a in args.use_alpha.split(',')])
+        args.kwargs.append(['use_alpha']
+                    + [bool(int(a)) for a in args.use_alpha.split(',')])
     if args.preload:
-        args.kwargs.append(['preload'] + [bool(int(a)) for a in args.preload.split(',')])
+        args.kwargs.append(['preload']
+                    + [bool(int(a)) for a in args.preload.split(',')])
     if args.probability:
-        args.kwargs.append(['probability'] + [int(a) for a in args.probability.split(',')])
+        args.kwargs.append(['probability']
+                    + [int(a) for a in args.probability.split(',')])
     args.kwargs = list(zip(*args.kwargs))
     return args
 
@@ -254,7 +265,7 @@ def get_subfolders_with_files(path, file_ext):
 if __name__ == "__main__":
     args = get_args()
     coco_writer = None
-    in_annotations = None
+    in_annots = None
     e_video_exts = ['webm']
     video_exts = ['mp4', 'avi']
     image_exts = ['jpg', 'png']
@@ -262,20 +273,20 @@ if __name__ == "__main__":
     if args.kwargs:
         keys = args.kwargs[0]
         for i, values in enumerate(args.kwargs[1:len(e_kwargs) + 1]):
-            e_kwargs[i] = {k:v for k, v in zip(keys, values)}
+            e_kwargs[i] = {k: v for k, v in zip(keys, values)}
 
     print('OpenCV is optimized:', cv2.useOptimized())
     if args.skip_annotations:
         print('Not writing annotaions!')
 
     if args.in_annotations is not None:
-        in_annotations = COCO(args.in_annotations)
+        in_annots = COCO(args.in_annotations)
         print('Building path to img id mapping...')
         path2img_id = dict()
-        for img in in_annotations.imgs.values():
+        for img in in_annots.imgs.values():
             path2img_id[img['file_name']] = img['id']
-        in_annotations.__dict__['root_path'] = args.in_path
-        in_annotations.__dict__['path2img_id'] = path2img_id
+        in_annots.__dict__['root_path'] = args.in_path
+        in_annots.__dict__['path2img_id'] = path2img_id
 
     # Get path for effects
     e_readers, e_cfgs = [], []
@@ -353,10 +364,10 @@ if __name__ == "__main__":
         create_folder(data_out_path, args.clean_out)
         is_exit = process_fn(
             file_paths, augmentations, data_out_path,
-            coco_writer, 
+            coco_writer,
             show_debug=args.show_debug,
             write_debug=args.write_debug,
-            in_annotations=in_annotations,
+            in_annots=in_annots,
             max_workers=args.max_workers,
         )
         # Write annotations

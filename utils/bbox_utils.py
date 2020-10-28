@@ -86,7 +86,7 @@ def blur_contour(image, blur_radius, contour_radius, blur_image=True, blur_alpha
         mask = np.zeros((*image.shape[:2], 1), np.ubyte)
         cv2.drawContours(mask, contours, -1, (1), contour_radius)
         image = np.where(mask, blurred_img, image)
-    
+
     if blur_alpha:
         alpha[:, :, 0] = cv2.GaussianBlur(alpha, b_rad, 0)
 
@@ -126,7 +126,6 @@ def add_shadow(e_image, offset, blur_radius, max_shadow_opacity, segments=None, 
     offset[0] = 0 if is_close_to_zero[0] else int(e_image.shape[1] * (offset[0] / 100))
     offset[1] = 0 if is_close_to_zero[1] else int(e_image.shape[0] * (offset[1] / 100))
 
-
     if offset[1] < -h:
         new_h = -offset[1]
         # Assume that object starts not at the edge of the image
@@ -147,7 +146,7 @@ def add_shadow(e_image, offset, blur_radius, max_shadow_opacity, segments=None, 
             obj_off = [0, 0]
         else:
             obj_off = [0, offset[1]]
-    
+
     new_image[obj_off[1]: h + obj_off[1],
               obj_off[0]: w + obj_off[0]] = e_image
     if segments is not None:
@@ -173,7 +172,7 @@ def add_shadow(e_image, offset, blur_radius, max_shadow_opacity, segments=None, 
     if len(shadow.shape) == 2:
         shadow = np.expand_dims(shadow, -1)
     shadow = shadow[blur_pad:-blur_pad, blur_pad:-blur_pad]
-    
+
     mask = new_image[..., 3:] / 255
     new_image[..., :3] = new_image[..., :3] * mask
     new_image[..., 3:] = new_image[..., 3:] + shadow * (1 - mask)
@@ -215,6 +214,7 @@ def convert_xyxy_xywh(bbox):
     bbox[2] = bbox[2] - bbox[0]
     bbox[3] = bbox[3] - bbox[1]
     return bbox
+
 
 def get_rotation_matrix(angle, cx, cy, h, w):
     # grab the dimensions of the image and then determine the
@@ -314,6 +314,7 @@ def rotate_box(corners, M):
     calculated = np.dot(M, corners.T).T
     return calculated.reshape(-1, 8)
 
+
 def rotate_poly(poly, M):
     """Rotate the polygon."""
     shape = poly.shape
@@ -321,6 +322,7 @@ def rotate_poly(poly, M):
     poly = np.hstack((poly, np.ones((poly.shape[0], 1), dtype=poly[0].dtype)))
     calculated = np.dot(M, poly.T).T
     return calculated.reshape(*shape)
+
 
 def get_intersection(bb1, bb2):
     assert bb1[0] < bb1[2]

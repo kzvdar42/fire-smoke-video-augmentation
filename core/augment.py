@@ -7,9 +7,9 @@ from tqdm import tqdm
 import numpy as np
 from core.reader import VideoEffectReader, ImageEffectReader
 from utils.bbox_utils import (convert_xywh_xyxy, convert_xyxy_xywh,
-                        blur_contour, resize, rotate, flip,
-                        add_shadow, gamma_correction,
-                        get_intersection)
+                              blur_contour, resize, rotate, flip,
+                              add_shadow, gamma_correction,
+                              get_intersection)
 
 
 @dataclass
@@ -28,11 +28,11 @@ class EffectInfo:
     bias: float  # brightness
     gamma: float  # gamma correction
     duration: int
-    cur_dur: int # Current duration
+    cur_dur: int  # Current duration
     image: np.ndarray = None
     segments: list = None
     e_cats: list = None
-    c_offset: tuple = None # Centered offset
+    c_offset: tuple = None  # Centered offset
 
     def get_bbox(self):
         x1, y1 = self.c_offset
@@ -187,7 +187,6 @@ class Augmentations:
         img1[y1: y2, x1: x2] = np.clip(effect * mask + orig_img * (1 - mask), 0, 255)
         return img1
 
-
     def get_image(self, e_info, read_annot=True):
         e_reader = self.e_readers[e_info.reader_id]
         if isinstance(e_reader, ImageEffectReader) and e_info.image is not None:
@@ -204,7 +203,8 @@ class Augmentations:
 
         # Resize image
         if cfg.do_resize:
-            e_image, _, segments = resize(e_image, max(e_info.shape), segments=segments)
+            e_image, _, segments = resize(
+                e_image, max(e_info.shape), segments=segments)
 
         # Transparency
         e_image[:, :, 3:] = e_image[:, :, 3:] * e_info.transparency
@@ -222,7 +222,7 @@ class Augmentations:
         if cfg.do_gamma:
             e_image[:, :, :3] = gamma_correction(
                 e_image[:, :, :3], e_info.gamma)
-        
+
         # Add shadow
         if cfg.do_shadow:
             e_image, segments = add_shadow(
@@ -232,18 +232,20 @@ class Augmentations:
 
         # Rotate image
         if cfg.do_rotate and e_info.angle:
-            e_image, _, segments = rotate(e_image, e_info.angle, segments=segments)
+            e_image, _, segments = rotate(
+                e_image, e_info.angle, segments=segments)
 
         # Blur image
         if cfg.do_blur:
             e_image = blur_contour(e_image,
-                cfg.blur_radius, cfg.contour_radius)
+                                   cfg.blur_radius, cfg.contour_radius)
 
         return e_image, segments
-    
-    def __call__(self, frame, f_boxes=None, writer=None, frame_num=None):
-        # TODO: Rename for better understanding that it's a tuple
-        f_boxes, f_cats = f_boxes
+
+    def __call__(self, frame, f_box_cats, writer=None, frame_num=None):
+        assert not ((writer is None) ^ (frame_num is None)), \
+                "provide either both writer and frame_num or none"
+        f_boxes, f_cats = f_box_cats
         # Add frame objects to annotations
         if writer is not None:
             for bbox, cat in zip(f_boxes, f_cats):
@@ -258,59 +260,61 @@ class Augmentations:
             self.create_effect(frame)
         return self.augment(frame, writer, frame_num)
 
-
     def augment(self, frame, writer=None, frame_num=None):
+        """Add effects to a given frame."""
+        assert not ((writer is None) ^ (frame_num is None)), \
+                "provide either both writer and frame_num or none"
         # Display effects
-        eff_to_delete = []
+        bad_effects = []
+        expired_effects = []
         for i,  e_info in enumerate(self.objects):
             cfg = self.e_cfgs[e_info.reader_id]
             # Get image
             e_image, segments, e_info.e_cats = self.get_image(e_info,
                 read_annot=writer is not None or self.debug_level > 1
             )
-            # If no image skip and delete
-            if e_image is None:
-                eff_to_delete.append(i)
+            # If no image or end of duration skip and delete
+            if e_image is None or e_info.cur_dur >= e_info.duration:
+                bad_effects.append(e_info)
                 continue
-            
+
             if e_info.image is None:
                 e_info.image, e_info.segments = \
-                e_image, segments = self.transform_effect(e_image, e_info, segments)
+                    e_image, segments = self.transform_effect(
+                        e_image, e_info, segments)
 
             # If image is grayed (night), convert effect to gray.
             hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             if (hsv_frame[:, :, 1] < 5).all():
                 e_info.image = \
-                e_image[:, :, :3] = (0.299 * e_image[:, :, 2:3] +
-                                     0.587 * e_image[:, :, 1:2] +
-                                     0.114 * e_image[:, :, :1])
-
-
-            # Correct the offset if it's wrong.
-            # min_x_pos = -e_image.shape[1] // (2 * int(cfg.min_size_far * max(frame.shape[:2])))
-            # if min_x_pos > e_info.offset[0]:
-            #     e_info.offset = (min_x_pos, e_info.offset[1])
+                    e_image[:, :, :3] = (0.299 * e_image[:, :, 2:3] +
+                                         0.587 * e_image[:, :, 1:2] +
+                                         0.114 * e_image[:, :, :1])
 
             # Apply effect on image
             frame = self.merge_images(frame, e_image, e_info.c_offset)
-            
-            # Update/Delete cur_dur
+
+            # Update/delete cur_dur
             e_info.cur_dur += 1
             if e_info.cur_dur >= e_info.duration:
-                eff_to_delete.append(i)
+                expired_effects.append(e_info)
         
-        # Write annotations and debug info
-        debug_frame = self.write_and_debug(frame, writer=writer, frame_num=frame_num)
+        # Delete bad effects before writing annotations
+        for e_info in bad_effects:
+            self.objects.remove(e_info)
 
-        # Delete expired effects
-        for i in sorted(eff_to_delete, reverse=True):
-            del self.objects[i]
+        # Write annotations and debug info
+        debug_frame = self.write_and_debug(
+            frame, writer=writer, frame_num=frame_num)
+        
+        # Delete expired effects after writing them in annotations
+        for e_info in expired_effects:
+            self.objects.remove(e_info)
 
         return frame, debug_frame
 
-
-    # Debug info
     def write_and_debug(self, frame, writer=None, frame_num=None):
+        """Write annotations and show debug info if needed."""
         # Write debug info to independent image
         debug_frame = frame.copy() if self.debug_level > 0 else None
         for e_info in self.objects:
@@ -329,7 +333,7 @@ class Augmentations:
                     # Show segment contours
                     if self.debug_level > 2:
                         cv2.drawContours(debug_frame, poly.astype(np.int32), -1,
-                                        (0, 0, 255), thickness=3)
+                                         (0, 0, 255), thickness=3)
                 for poly, cat in zip(segments, e_info.e_cats):
                     bbox = cv2.boundingRect(poly.astype(np.int32))
                     min_side_size = min(bbox[2:])
@@ -343,7 +347,7 @@ class Augmentations:
                     # Write annotations
                     if writer is not None and min_side_size >= cfg.min_bbox_size:
                         writer.add_annotation(frame_num, bbox, e_info.track_id,
-                                                 writer.get_cat_id(cat))
+                                              writer.get_cat_id(cat))
             # draw a point there offset is
             if self.debug_level > 0:
                 cv2.circle(debug_frame, tuple(e_info.offset), 4, (0, 255, 0), 2)
@@ -351,7 +355,6 @@ class Augmentations:
             if self.debug_level > 3:
                 self.draw_effect_info(debug_frame, e_info)
         return debug_frame
-
 
     def put_text(self, frame, text, position):
         """Draw white text with black outline on the given frame."""
@@ -363,6 +366,7 @@ class Augmentations:
                     1, (255, 255, 255), 2)
 
     def draw_effect_info(self, frame, e_info):
+        """Draw effect info on image (filename, rotation angle, gain, bias, gamma, etc.)."""
         e_reader = self.e_readers[e_info.reader_id]
         cfg = self.e_cfgs[e_info.reader_id]
         effect_filename = os.path.split(e_reader.paths[e_info.idx])[1]

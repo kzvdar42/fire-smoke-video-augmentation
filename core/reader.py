@@ -10,8 +10,10 @@ from pycocotools.coco import COCO
 from utils.get_image_info import get_image_size
 from utils.bbox_utils import (convert_xywh_xyxy, get_corners, prepare_image)
 
+
 def get_bboxes_from_obj(obj):
     bbox = convert_xywh_xyxy(obj['bbox'], width, height)
+
 
 def get_segments_and_cats_from_obj(obj, cats):
     # If no segmentation, get box corners
@@ -49,8 +51,8 @@ class VideoEffectReader:
         for mov_path in self.paths:
             cap = cv2.VideoCapture(mov_path)
             # Get width and height
-            width  = cap.get(cv2.CAP_PROP_FRAME_WIDTH)  # float
-            height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT) # float
+            width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)  # float
+            height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)  # float
             self.frame_shapes.append((height, width))
 
             # XXX: This should work, but in my case it fails
@@ -73,10 +75,8 @@ class VideoEffectReader:
             else:
                 self.annotations.append(None)
 
-
     def get_frame_shape(self, video_idx):
         return self.frame_shapes[video_idx]
-    
 
     def get_frame(self, e_info, use_alpha=None, read_annot=False):
         use_alpha = use_alpha if use_alpha is not None else self.use_alpha
@@ -186,11 +186,9 @@ class ImageEffectReader:
                 for line in in_file.readlines():
                     category, x1, y1, x2, y2, img_name = line.split(',')[:6]
                     annotations[img_name].append([*map(int, [x1, y1, x2, y2]), category])
-
             for k, v in annotations.items():
                 annotations[k] = np.array(v)
         return annotations
-
 
     def get_frame(self, e_info, read_annot):
         e_image = self.loaded[e_info.idx]
@@ -219,16 +217,16 @@ class ThreadPoolHelper:
         self.pool = ThreadPoolExecutor(max_workers=max_workers)
         self.write_out = write_out
         self.futures = []
-    
+
     def submit(self, func, *args, **kwargs):
         future = self.pool.submit(func, *args, **kwargs)
         self.futures.append(future)
         self.check_status()
         return future
-    
+
     def shutdown(self, wait=True):
         return self.pool.shutdown(wait)
-    
+
     def check_status(self):
         futures, self.futures = self.futures, []
         for future in futures:
