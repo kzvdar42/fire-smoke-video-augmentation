@@ -2,7 +2,7 @@ do_resize: True
 # Size limits
 # mean size in regards to bigger image side
 min_size_far: 0.03
-min_size_close: 0.20
+min_size_close: 0.15
 # Jitter the size using next formula:
 # size = random(min_size, min_size * (1 + size_jitter))
 size_jitter: 0.5
@@ -27,7 +27,7 @@ bias_scale: 2.5
 # Gamma correction control
 do_gamma: True
 gamma_from: 0.8
-gamma_to: 1.05
+gamma_to: 1.2
 
 # Add shadow to the object
 do_shadow: True
@@ -37,14 +37,16 @@ shadow_x_max: 90
 shadow_y_min: -190
 shadow_y_max: 90
 min_shadow_trans: 30
-max_shadow_trans: 90
+max_shadow_trans: 80
 
 # Blur contour of effect
 do_blur: True
 blur_radius: 7
 contour_radius: 7
 
-min_transparency: 92
+do_color_transfer: False
+
+min_transparency: 95
 max_transparency: 100
 
 # Duration limits

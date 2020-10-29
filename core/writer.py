@@ -89,6 +89,9 @@ class COCO_writer:
     def write_result(self, save_path):
         result = dict()
 
+        if len(self.images) == 0 or len(self.annotations) == 0:
+            print('Empty annotations, do not write to the file.')
+
         result['annotations'] = self.annotations
         result['categories'] = self.categories
         result['images'] = self.images

@@ -6,6 +6,7 @@ import cv2
 from tqdm import tqdm
 import numpy as np
 from core.reader import VideoEffectReader, ImageEffectReader
+from utils.color_transfer import color_transfer, hist_norm, simplest_cb
 from utils.bbox_utils import (convert_xywh_xyxy, convert_xyxy_xywh,
                               blur_contour, resize, rotate, flip,
                               add_shadow, gamma_correction,
@@ -74,6 +75,8 @@ class AugmentationConfig:
     shadow_y_max: int = 20
     min_shadow_trans: int = 40
     max_shadow_trans: int = 80
+
+    do_color_transfer: bool = False
 
     min_transparency: int = 80
     max_transparency: int = 100
@@ -171,7 +174,8 @@ class Augmentations:
     def add_effect(self, effect):
         self.objects.append(effect)
 
-    def merge_images(self, img1, img2, offset=None):
+    @staticmethod
+    def merge_images(img1, img2, offset=None):
         offset = offset if offset is not None else (0, 0)
         # Left top coordinates
         def get_coords(x): return (x, 0) if x >= 0 else (0, -x)
@@ -198,7 +202,7 @@ class Augmentations:
             # e_info.centered_offset = None
         return e_image, segments, e_cats
 
-    def transform_effect(self, e_image, e_info, segments):
+    def transform_effect(self, e_image, e_info, frame, segments):
         cfg = self.e_cfgs[e_info.reader_id]
 
         # Resize image
@@ -229,6 +233,10 @@ class Augmentations:
                 e_image, e_info.shadow_off, cfg.shadow_blur_radius,
                 e_info.shadow_trans, segments=segments, e_info=e_info,
             )
+
+        if cfg.do_color_transfer:
+            e_image[:, :, :3] = color_transfer(frame.copy()[int(0.2 * frame.shape[0]):, :],  e_image, preserve_paper=False)
+            # e_image[:, :, :3] = color_transfer(frame.copy(),  e_image[:, :, :3], preserve_paper=False)
 
         # Rotate image
         if cfg.do_rotate and e_info.angle:
@@ -281,12 +289,13 @@ class Augmentations:
             if e_info.image is None:
                 e_info.image, e_info.segments = \
                     e_image, segments = self.transform_effect(
-                        e_image, e_info, segments)
+                        e_image, e_info, frame.copy(), segments)
+            
 
             # If image is grayed (night), convert effect to gray.
             hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             if (hsv_frame[:, :, 1] < 5).all():
-                e_info.image = \
+                e_info.image[:, :, :3] = \
                     e_image[:, :, :3] = (0.299 * e_image[:, :, 2:3] +
                                          0.587 * e_image[:, :, 1:2] +
                                          0.114 * e_image[:, :, :1])

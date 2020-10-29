@@ -54,8 +54,8 @@ def draw_debug(debug_frame):
 
 
 def process_video(in_video_path, augmentations, out_path,
-                  writer=None, show_debug=False, write_debug=False, in_annotations=None, max_workers=None):
-    if in_annotations is not None:
+                  writer=None, show_debug=False, write_debug=False, in_annots=None, max_workers=None):
+    if in_annots is not None:
         raise NotImplementedError('Not yet implemented for video sources.')
     in_stream = cv2.VideoCapture(in_video_path)
     is_exit = False
@@ -129,8 +129,6 @@ def process_images(image_paths, augmentations, out_path,
             pbar.set_description(f'Skipped {skipped_counter} - {image_path}')
             image_name = os.path.split(image_path)[1]
             out_ipath = os.path.join(out_path, image_name)
-            if writer:
-                image_num, _ = writer.add_frame(*image.shape[:2], out_ipath)
             if in_annots:
                 height, width = image.shape[:2]
                 rel_path = os.path.relpath(image_path, in_annots.root_path).replace('\\', '/')
@@ -145,6 +143,8 @@ def process_images(image_paths, augmentations, out_path,
                     skipped_counter += 1
                     # pbar.update(1)
                     continue
+            if writer:
+                image_num, _ = writer.add_frame(*image.shape[:2], out_ipath)
             image, debug_image = process_image(image, augmentations, f_box_cats=f_box_cats,
                                                writer=writer, frame_num=image_num)
             image = debug_image if write_debug else image

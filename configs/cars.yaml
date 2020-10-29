@@ -34,6 +34,8 @@ do_blur: True
 blur_radius: 7
 contour_radius: 7
 
+do_color_transfer: False
+
 min_transparency: 80
 max_transparency: 100
 
