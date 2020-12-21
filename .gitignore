@@ -136,3 +136,4 @@ ufa
 output/*
 out
 !output/run_annot.py
+*.zip

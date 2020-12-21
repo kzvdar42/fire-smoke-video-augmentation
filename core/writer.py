@@ -20,6 +20,7 @@ class COCO_writer:
         self.annotations = []
         self.images = []
         self.cat_to_id = dict()
+        self.max_im_id = 0
         for cat in self.categories:
             cat_id = cat['id']
             self.cat_to_id[cat['name'].lower()] = cat_id
@@ -49,8 +50,12 @@ class COCO_writer:
             'id': cat_id,
         })
 
-    def add_frame(self, height, width, filename=None, file_ext=None):
-        image_id = len(self.images) + 1
+    def add_frame(self, height, width, filename=None, file_ext=None, image_id=None):
+        if image_id:
+            self.max_im_id = max(image_id, self.max_im_id)
+        else:
+            self.max_im_id += 1
+            image_id = self.max_im_id
         if filename is None:
             file_ext = file_ext if file_ext is not None else 'jpg'
             filename = f'{image_id:0>7}.{file_ext}'
@@ -70,10 +75,9 @@ class COCO_writer:
         return image_id, filename
 
     def add_annotation(self, image_id, bbox, track_id, category_id, segmentation=None):
-        area = int(bbox[1] * bbox[3])
-
         assert image_id is not None
 
+        area = int(bbox[1] * bbox[3])
         self.annotations.append({
             'image_id': image_id,
             'segmentation': segmentation,
@@ -85,18 +89,43 @@ class COCO_writer:
             'id': len(self.annotations) + 1,
             'category_id': category_id,
         })
+    
+    def _update_with_coco(self, coco_json):
+        for image_dict in coco_json['images']:
+            self.add_frame(
+                height=image_dict['height'],
+                width=image_dict['width'],
+                filename=image_dict['file_name'],
+                image_id=image_dict['id'],
+            )
+        cat_id_to_name = {cat['id']: cat['name'] for cat in coco_json['categories']}
+        for annot_dict in coco_json['annotations']:
+            self.add_annotation(
+                image_id=annot_dict['image_id'],
+                bbox=annot_dict['bbox'],
+                track_id=annot_dict.get('track_id', None),
+                category_id=self.get_cat_id(cat_id_to_name[annot_dict['category_id']]),
+                segmentation=annot_dict.get('segmentation', None)
+            )
 
-    def write_result(self, save_path):
+    def update_with_coco(self, coco_path):
+        with open(coco_path) as in_file:
+            self._update_with_coco(json.load(in_file))
+    
+    def get_json(self):
         result = dict()
-
-        if len(self.images) == 0 or len(self.annotations) == 0:
-            print('Empty annotations, do not write to the file.')
-
         result['annotations'] = self.annotations
         result['categories'] = self.categories
         result['images'] = self.images
         result['licenses'] = None
         result['info'] = None
+        return result
+
+    def write_result(self, save_path):
+        if len(self.images) == 0 or len(self.annotations) == 0:
+            print('Empty annotations, do not write to the file.')
+
+        result = self.get_json()
         with open(save_path, 'w') as out_file:
             json.dump(
                 result,
@@ -108,34 +137,16 @@ class COCO_writer:
 
 
 def get_coco_writer():
-    return COCO_writer([
-        {
-            'name': 'person',
-            'supercategory': '',
-            'id': 1,
-        },
-        {
-            'name': 'vehicle',
-            'supercategory': '',
-            'id': 2,
-        },
-        {
-            'name': 'fire',
-            'supercategory': '',
-            'id': 3,
-        },
-        {
-            'name': 'animal',
-            'supercategory': '',
-            'id': 4,
-        },
-        {
-            'name': 'smoke',
-            'supercategory': '',
-            'id': 5,
-        },
-    ],
-    synonyms={
-        'vehicle': ['Car']
-    }
+    return COCO_writer(
+        categories = [
+            {'name': 'person',  'supercategory': '', 'id': 1},
+            {'name': 'vehicle', 'supercategory': '', 'id': 2},
+            {'name': 'fire',    'supercategory': '', 'id': 3},
+            {'name': 'animal',  'supercategory': '', 'id': 4},
+            {'name': 'smoke',   'supercategory': '', 'id': 5},
+        ],
+        synonyms={
+            'vehicle': ['car', 'bicycle', 'motorcycle', 'bus', 'truck'],
+            'animal': ['cat', 'dog', 'horse', 'sheep', 'cow' 'elephant', 'bear', 'zebra', 'giraffe'],
+        }
     )

@@ -40,7 +40,7 @@ def color_transfer(source, target, clip=True, preserve_paper=True):
     # sure to utilizing the floating point data type (note: OpenCV
     # expects floats to be 32-bit, so use that instead of 64-bit)
     source = cv2.cvtColor(source, cv2.COLOR_BGR2LAB).astype(np.float32)
-    target_alpha = target[:, :, 3]
+    target_alpha = target[:, :, 3] if target.shape[2] == 4 else None
     target = cv2.cvtColor(target, cv2.COLOR_BGR2LAB).astype(np.float32)
 
     # compute color statistics for the source and target images
@@ -56,16 +56,16 @@ def color_transfer(source, target, clip=True, preserve_paper=True):
     try:
         if preserve_paper:
             # scale by the standard deviations using paper proposed factor
-            # if lStdSrc != 0:
-                # l = (lStdTar / lStdSrc) * l
+            if lStdSrc != 0:
+                l = (lStdTar / lStdSrc) * l
             if aStdSrc != 0:
                 a = (aStdTar / aStdSrc) * a
             if bStdSrc != 0:
                 b = (bStdTar / bStdSrc) * b
         else:
             # scale by the standard deviations using reciprocal of paper proposed factor
-            # if lStdTar != 0:
-                # l = (lStdSrc / lStdTar) * l
+            if lStdTar != 0:
+                l = (lStdSrc / lStdTar) * l
             if aStdTar != 0:
                 a = (aStdSrc / aStdTar) * a
             if bStdTar != 0:
@@ -88,7 +88,7 @@ def color_transfer(source, target, clip=True, preserve_paper=True):
     # space, being sure to utilize the 8-bit unsigned integer data
     # type
 
-    # (_, a, b) = cv2.split(target)
+    (_, a, b) = cv2.split(target)
     # (l, aa, bb) = cv2.split(target)
 
     transfer = cv2.merge([l, a, b])

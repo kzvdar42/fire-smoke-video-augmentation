@@ -28,6 +28,33 @@ def sort_by_digits_in_name(path):
     return get_int_from_str(os.path.splitext(os.path.split(path)[1])[0])
 
 
+def create_folder(path, clean_out):
+    try:
+        os.makedirs(path)
+    except OSError:
+        if clean_out:
+            clean_folder_content(path)
+
+
+def get_subfolders_with_files(path, file_ext):
+    for dp, dn, fn in os.walk(path):
+        file_paths = [os.path.join(dp, f) for f in fn if f.endswith(file_ext)]
+        if len(file_paths):
+            if file_ext in video_exts:
+                for file_path in file_paths:
+                    yield [file_path]
+            else:
+                yield file_paths
+
+
+def clean_folder_content(path):
+    for root, dirs, files in os.walk(path):
+        for f in files:
+            os.unlink(os.path.join(root, f))
+        for d in dirs:
+            shutil.rmtree(os.path.join(root, d))
+
+
 def process_image(frame, augmentations, f_box_cats=None, writer=None, frame_num=None):
     if f_box_cats is None:
         f_box_cats = ([], [])
@@ -169,14 +196,6 @@ def process_images(image_paths, augmentations, out_path,
         return is_exit
 
 
-def clean_folder_content(path):
-    for root, dirs, files in os.walk(path):
-        for f in files:
-            os.unlink(os.path.join(root, f))
-        for d in dirs:
-            shutil.rmtree(os.path.join(root, d))
-
-
 def get_default_reader_kwargs():
     return {
         'probability': 1,
@@ -241,25 +260,6 @@ def get_args():
                     + [int(a) for a in args.probability.split(',')])
     args.kwargs = list(zip(*args.kwargs))
     return args
-
-
-def create_folder(path, clean_out):
-    try:
-        os.makedirs(path)
-    except OSError:
-        if clean_out:
-            clean_folder_content(path)
-
-
-def get_subfolders_with_files(path, file_ext):
-    for dp, dn, fn in os.walk(path):
-        file_paths = [os.path.join(dp, f) for f in fn if f.endswith(file_ext)]
-        if len(file_paths):
-            if file_ext in video_exts:
-                for file_path in file_paths:
-                    yield [file_path]
-            else:
-                yield file_paths
 
 
 if __name__ == "__main__":

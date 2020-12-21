@@ -6,7 +6,8 @@ import cv2
 from tqdm import tqdm
 import numpy as np
 from core.reader import VideoEffectReader, ImageEffectReader
-from utils.color_transfer import color_transfer, hist_norm, simplest_cb
+from utils.new_ct import color_transfer
+# from utils.color_transfer import color_transfer, hist_norm, simplest_cb
 from utils.bbox_utils import (convert_xywh_xyxy, convert_xyxy_xywh,
                               blur_contour, resize, rotate, flip,
                               add_shadow, gamma_correction,
@@ -227,15 +228,17 @@ class Augmentations:
             e_image[:, :, :3] = gamma_correction(
                 e_image[:, :, :3], e_info.gamma)
 
+
+
         # Add shadow
         if cfg.do_shadow:
             e_image, segments = add_shadow(
                 e_image, e_info.shadow_off, cfg.shadow_blur_radius,
                 e_info.shadow_trans, segments=segments, e_info=e_info,
             )
-
+        
         if cfg.do_color_transfer:
-            e_image[:, :, :3] = color_transfer(frame.copy()[int(0.2 * frame.shape[0]):, :],  e_image, preserve_paper=False)
+            e_image[:, :, :3] = color_transfer(frame.copy()[int(0.2 * frame.shape[0]):, :],  e_image)
             # e_image[:, :, :3] = color_transfer(frame.copy(),  e_image[:, :, :3], preserve_paper=False)
 
         # Rotate image
